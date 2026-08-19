@@ -1,0 +1,18 @@
+# Secrets —— 永不入库
+.env
+
+# Node
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 玩家存档与数据库（世界存档，不入库）
+server/db/aitown.db
+saves/
+
+# OS
+.DS_Store

@@ -1,0 +1,135 @@
+body {
+  margin: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  background: #1a2f0e;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+/* 舞台：canvas + HUD 叠放 */
+#stage {
+  position: relative;
+  width: 960px;
+  height: 640px;
+}
+
+#hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none; /* 默认不挡游戏操作，具体控件单独开 */
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* 小镇播报按钮（右上角） */
+#event-log-toggle {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  pointer-events: auto;
+  padding: 6px 12px;
+  border: 2px solid #3d2b1f;
+  border-radius: 8px;
+  background: #fff8e7;
+  color: #3d2b1f;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+/* 事件日志面板（右侧，可折叠） */
+#event-log {
+  position: absolute;
+  top: 48px;
+  right: 10px;
+  width: 260px;
+  max-height: 320px;
+  overflow-y: auto;
+  pointer-events: auto;
+  background: rgba(255, 248, 231, 0.95);
+  border: 2px solid #3d2b1f;
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 13px;
+  color: #3d2b1f;
+}
+
+#event-log .event {
+  padding: 3px 0;
+  border-bottom: 1px dashed #d8c9a8;
+}
+
+#event-log .event .time {
+  color: #8a6d3b;
+  margin-right: 6px;
+}
+
+/* 走近提示 */
+#hint {
+  position: absolute;
+  bottom: 130px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  background: rgba(61, 43, 31, 0.85);
+  color: #fff8e7;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+/* 对话面板（底部） */
+#chat-panel {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  width: 560px;
+  pointer-events: auto;
+  background: rgba(255, 248, 231, 0.97);
+  border: 2px solid #3d2b1f;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+#chat-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: #3d2b1f;
+  margin-bottom: 6px;
+}
+
+#chat-history {
+  max-height: 150px;
+  overflow-y: auto;
+  font-size: 14px;
+  color: #3d2b1f;
+  margin-bottom: 8px;
+}
+
+#chat-history .line {
+  padding: 2px 0;
+}
+
+#chat-history .who {
+  font-weight: bold;
+  margin-right: 6px;
+}
+
+#chat-history .thinking {
+  color: #8a6d3b;
+  font-style: italic;
+}
+
+#chat-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  font-size: 14px;
+  border: 2px solid #3d2b1f;
+  border-radius: 6px;
+  background: #fff;
+  outline: none;
+}
