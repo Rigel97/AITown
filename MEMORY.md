@@ -5,7 +5,7 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 -->
 
 ## 🏗️ Active Phase & Goal
-**Current Task:** 小镇编年史（全部交互逐句全文落盘 saves/chronicle.jsonl）✅
+**Current Task:** README + 实际游戏截图已上线 GitHub（github.com/Rigel97/AITown，公开仓）✅
 **Next Steps:**
 1. 存档/读档（Phase 3）
 2. 成本实测校准（W4）
@@ -31,6 +31,7 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 
 ## 🐛 Known Issues & Quirks
 *(Log current bugs or weird workarounds here)*
+- **GitHub 工作流注意**（2026-08-19 建仓）：仓库 github.com/Rigel97/AITown（公开）；推送凭证用 `gh auth`（设备码登录已完成，`gh auth setup-git` 可让 git push 永久免密）；提交身份临时用 `-c user.name/user.email` 注入（Rigel97 + noreply 邮箱），没改全局 git 配置；后续改动记得 commit+push。
 - 成本达标风险：按已核实单价，单次游戏日 ≤ ¥2.1 目标需 ~70%+ Prompt 缓存命中率，存在超标风险 → W1 实测命中率，W4 校准，必要时下调调用量假设或上调预算。
 - Phaser v4 较新：AI 可能给出 v3 语法的答案 → 提问时明确"Phaser v4"，收到代码先核对版本 API。
 - 人设前缀必须逐字固定放 prompt 开头：任何变动都会毁掉缓存命中率，改人设=改 `residents.prompt_prefix` 后重新评估成本。
