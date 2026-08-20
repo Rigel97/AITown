@@ -12,7 +12,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12+-3776ab?logo=python&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-记忆流-003b57?logo=sqlite&logoColor=white)
 
-对标斯坦福 [Generative Agents（Smallville）](https://arxiv.org/abs/2304.03442) 的可参与版：不只是旁观 AI 社会，而是亲自住进去。与 Character.AI 类"一对一聊天框"的区别在于**世界感**——居民有自己的日程、会在路上偶遇聊天、会记得上周你帮忙试吃过新配方面包，第二天在广场和别的居民聊起你。
+不只是旁观 AI 社会的模拟，而是**亲自住进去**。与 Character.AI 类"一对一聊天框"的区别在于**世界感**——居民有自己的日程、会在路上偶遇聊天、会记得上周你帮忙试吃过新配方面包，第二天在广场和别的居民聊起你。
 
 ## ✨ 核心特性
 
@@ -146,7 +146,7 @@ cd client && npm test        # vitest：动作 emoji 映射等前端单元
 
 - 城镇瓦片地图与角色精灵：[a16z ai-town](https://github.com/a16z-infra/ai-town)（mage3 城镇图 + 32x32folk，MIT）
 - 部分装饰素材：[Kenney](https://kenney.nl/)（CC0）
-- 架构灵感：斯坦福 Generative Agents 论文 *Generative Agents: Interactive Simulacra of Human Behavior*
+- 架构灵感：Generative Agents 论文 *Generative Agents: Interactive Simulacra of Human Behavior*
 
 ## 🗺️ 路线图
 
