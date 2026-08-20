@@ -110,6 +110,6 @@ def world_context(db_path: Path = DB_PATH) -> str:
     roster = "、".join(f"{name}（{occupation}）" for name, occupation in rows)
     places = "、".join(sorted(LOCATION_SPOTS.keys()))
 
-    block = f"""【小镇】镇上只有这些居民：{roster}，以及刚搬来的新邻居——就是和你说话的玩家。镇上的地方有：{places}；南边的小路通往县城（每周三县城商队来供货）。除了名单上的人，镇上没有其他居民——不要编造不存在的镇民。"""
+    block = f"""【小镇】镇上只有这些居民：{roster}，以及最近刚搬来的新邻居（就是会来找你搭话的玩家；玩家不在场时，和你聊天的都是名单上的老街坊）。镇上的地方有：{places}；南边的小路通往县城（每周三县城商队来供货）。除了名单上的人，镇上没有其他居民——不要编造不存在的镇民。"""
     _world_context_cache[key] = block
     return block

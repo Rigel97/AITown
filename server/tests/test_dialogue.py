@@ -8,9 +8,11 @@ LLM 会编造不存在的镇民（2026-08-17 用户实测：老宋要给不存�
 世界观块必须逐字稳定（吃 Prompt 缓存），所以缓存与稳定性都要锁定。
 """
 
+import asyncio
 import sqlite3
 from pathlib import Path
 
+from agents import dialogue
 from agents.dialogue import (
     build_chat_prompt,
     parse_speaker_lines,
@@ -114,3 +116,93 @@ def test_parse_yesno_accepts_affirmative() -> None:
     assert parse_yesno("") is False
     # 否定一律算不
     assert parse_yesno("不") is False
+
+
+# ---------- 台词卫生（2026-08-20 实测翻车样例回归） ----------
+
+
+def test_parse_turn_strips_wrapping_quotes() -> None:
+    """模型把台词包在引号里（实测：林师傅 "“刚出炉的……”"）→ 剥引号留话。"""
+    text, _ = parse_turn("“刚出炉的，尝尝！”", "林师傅")
+    assert text == "刚出炉的，尝尝！"
+
+
+def test_parse_turn_asterisk_action_only_is_failure() -> None:
+    """整行星号动作（实测：苏晚“*轻轻抬眼看向老周*”）→ 没台词，算失败。"""
+    text, want_end = parse_turn("*压低声音，眼睛瞟了瞟门口*", "老周")
+    assert text == ""
+    assert want_end is False
+
+
+def test_parse_turn_asterisk_action_with_speech_keeps_speech() -> None:
+    text, _ = parse_turn("*凑近了些*说吧，没人。", "老周")
+    assert text == "说吧，没人。"
+
+
+def test_parse_turn_leading_action_paren_keeps_speech() -> None:
+    """行首（动作）+台词 → 剥动作留台词。"""
+    text, _ = parse_turn("（点了点头）嗯，还行。", "老宋")
+    assert text == "嗯，还行。"
+
+
+def test_parse_turn_pure_stage_direction_is_failure() -> None:
+    """整行括号动作（实测：老宋开场只写了端茶杯旁白）→ 算失败。"""
+    text, want_end = parse_turn("（端着一盘刚出炉的小餐包从后厨走出来）", "林师傅")
+    assert text == ""
+    assert want_end is False
+
+
+def test_parse_turn_falls_through_to_speech_line() -> None:
+    """首行是动作、次行才是话 → 取到话，不误判失败。"""
+    raw = "（端着一盘面包走出来）\n来了？想买点啥？"
+    text, _ = parse_turn(raw, "林师傅")
+    assert text == "来了？想买点啥？"
+
+
+def test_parse_turn_skips_other_speakers_lines() -> None:
+    """模型替对方说话（实测：老周回合输出“老宋：嗯，还行。”）→ 跳过对方行取自己的。"""
+    raw = """红姐：老周你来了？
+林师傅：哟，这就把话头抢了！"""
+    text, _ = parse_turn(raw, "林师傅", other_names=["红姐"])
+    assert text == "哟，这就把话头抢了！"
+
+
+def test_parse_turn_all_other_lines_is_failure() -> None:
+    """整段都在替别人说话 → 空台词（引擎累计失败散场），不再张冠李戴。"""
+    text, want_end = parse_turn("老宋：嗯，还行。", "老周", other_names=["老宋"])
+    assert text == ""
+    assert want_end is False
+
+
+def test_conversation_turn_rejects_repeated_line(tmp_path, monkeypatch) -> None:
+    """复读守卫：和自己在场说过的原话相同（含标点差异）→ 视为没接上。"""
+    db = _fresh_db(tmp_path)
+    resident = load_residents(db)[0]  # 林师傅
+
+    async def fake_chat(prompt: str, tier: str, timeout: float = 0) -> str:
+        return "刚出炉的，尝尝！"
+
+    monkeypatch.setattr(dialogue, "chat", fake_chat)
+    transcript = [("林师傅", "刚出炉的，尝尝"), ("红姐", "好吃！")]
+    text, want_end = asyncio.run(
+        dialogue.conversation_turn(
+            resident, ["红姐"], transcript, "day1-08:00", "面包店", db
+        )
+    )
+    assert text == ""
+    assert want_end is False
+
+
+def test_player_say_strips_theatrics_from_reply(tmp_path, monkeypatch) -> None:
+    """玩家对话回复同样剥舞台剧包装（实测出现过（拍拍面粉）开头的回复）。"""
+    db = _fresh_db(tmp_path)
+    resident = load_residents(db)[0]
+
+    async def fake_chat(prompt: str, tier: str, timeout: float = 0) -> str:
+        return "（拍拍手上的面粉）来了！要啥面包？"
+
+    monkeypatch.setattr(dialogue, "chat", fake_chat)
+    reply = asyncio.run(
+        dialogue.player_say(resident, "买两个面包", "day1-08:00", "面包店", db)
+    )
+    assert reply == "来了！要啥面包？"

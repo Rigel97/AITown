@@ -5,7 +5,7 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 -->
 
 ## 🏗️ Active Phase & Goal
-**Current Task:** README + 实际游戏截图已上线 GitHub（github.com/Rigel97/AITown，公开仓）✅
+**Current Task:** 对话去 AI 味六件套完成（口头禅/舞台腔/张冠李戴/复读/骑墙/认错人）✅
 **Next Steps:**
 1. 存档/读档（Phase 3）
 2. 成本实测校准（W4）
@@ -28,6 +28,8 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 - 2026-08-19 — **视觉优化五件套**（对标斯坦福 Smallville 观感差距分析落地，全部零 LLM 成本）：①居民移动插值——服务端广播改为 **1/3 秒/拍 × 每拍 1 格**（等速 3 格/秒，时钟节奏不变 tick(1/3)×3），客户端"按时到位"插值（速度=剩余距离×3/s，恰在下一拍到达，无脉冲感、不切墙角、转向精确）；②头顶动作 emoji（`world/actionEmoji.ts` 关键词映射+职业回退，`public()` 补发 occupation）；③zoom 键 1/2/3 切 ×2/×1.5/×1；④角色 y-sorting（depth=y，玩家/居民/名牌统一）；⑤暖色 ColorMatrix 滤镜（B 键开关）。
 - 2026-08-19 — **为什么不做前景遮挡层（walk-behind）**：几何核算——32px 角色配全尺寸物理体 + obj 层全部阻挡，角色与物件瓦片**零像素重叠**（Smallville 角色是 1.25 格放大才需要前景层）。本地图真正可见的遮挡问题是角色互相遮挡（聚集点），y-sorting 已解决；未来若放大角色尺寸需重评。
 - 2026-08-19 — **小镇编年史选 JSONL 文件而非改 schema**：居民全部交互（邀请/加入/散场全文/玩家对话）逐句全文写 `saves/chronicle.jsonl`（每行一个 JSON，双时间戳 game_time+real_time）。理由：①全文给"人"回看、摘要给"机器"检索——职责不同所以不进 memories 表（全文入表会撑爆检索候选集和 Prompt 成本）；②JSONL 追加安全、中文原样可读、日后可机器解析（故事线 UI / 小镇周报的现成数据源），Markdown 排版可随时从 JSONL 生成，反向不行；③saves/ 已 gitignore 且零 schema 迁移（AGENTS.md 保护区内不动库）。写入失败只告警不抛错——旁路档案绝不打断游戏（`world/chronicle.py`）。
+- 2026-08-20 — **对话去 AI 味 = 三层防线**：①prompt 指令段（动态部分，零缓存影响）——只输出台词本身、禁括号/星号/引号/旁白、禁替对方说话、禁“（或……）”骑墙表达、限 40 字；②解析侧兜底 `dialogue._strip_theatrics`/`parse_turn`——剥舞台剧包装、跳过替别人说话的行、纯动作行看下一行；③复读守卫——`conversation_turn` 归一化比对说话人本场旧话，相同判失败（连败散场）。实测对比：修复前老周 16 场 16 次“想当年我送信”+多处括号旁白/张冠李戴/骑墙称呼；修复后 10 场 0 病灶，还涌现出小豆子假花自嘲、老宋老周“二锅头”式极简对话。
+- 2026-08-20 — **人设前缀禁止写“口头禅X”这类可复制短句**（教训）：prefix 的【说话风格】里写着 口头禅“刚出炉的，尝尝！”——prompt 把口头禅当指令，模型每句复读。已重写 7 段为纯风格描述（用户批准，缓存一次性重置后照常累积）。规则：风格写“怎么说话”（节奏/语气/话题偏好），不写“说哪句话”。
 
 ## 🐛 Known Issues & Quirks
 *(Log current bugs or weird workarounds here)*
@@ -76,5 +78,6 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 - [x] mage3 城镇地图替换（2026-08-19：底图从代码生成的 Kenney 色块图换为 ai-town 的 mage3 石质城镇（50×50、32px、MIT）：`client/scripts/convert_aitown_map.mjs` 转换管线——列主序转行主序 + 坏 id 清洗 + 主连通区校验，产出 town_map.json 前后端共读；前端 4 层渲染（2 bg + 2 obj，碰撞挂 obj 层 `setCollisionByExclusion([-1])`，与 ai-town blockedWithPositions 语义一致）；角色换 32x32folk 动画精灵表（每角色 96×128 块，四方向各 3 帧行走，玩家 f8/居民 f1-f7，帧号 mapData.walkFrames 计算，动画按需创建）；站位点/出生点/seed 坐标全部重映射并锁定主连通区；engine 出生点改读共享数据。实测：像素分析 540 色、玩家碰撞停在墙边 x=752、居民按计划自主移动（阿茉广场浇花、红姐回餐馆备料、老周去杂货店打听消息）、对话状态机正常（林师傅×小豆子聊天中、老宋拒绝苏晚邀请）、玩家对话回复贴人设、Esc 关面板、事件日志滚动 50 条。tsc 零错误 + 51 测试全绿。）
 - [x] 视觉观感优化五件套（2026-08-19：对标斯坦福观感差距分析落地，全部零 LLM 成本。**插值**——服务端 1/3 秒/拍×1 格（等速），客户端"按时到位"插值，96 秒采样实测最大相邻位移 13.3px/100ms（旧版每秒跳 96px）；**emoji 外显**——头顶名牌"名字+动作 emoji"（林师傅🥐/阿茉🌸/红姐🍳职业回退/聊天中💬），走近提示附完整动作文本；**zoom 切换**——键 1/2/3 = ×2/×1.5/×1；**y-sorting**——玩家/居民/名牌 depth=y；**暖色滤镜**——v4 Filters ColorMatrix（提亮 1.12×+饱和 1.2+色相-12°），B 键开关，像素统计亮度 0.56→0.67/饱和 0.24→0.33/暖度 r-b 18→39。顺手修两个 bug：brightness 乘法语义踩坑（首版画面全黑）、玩家走路动画 NaN 帧（历史遗留）。验证：tsc 零错误 + vitest 5 测 + pytest 51 测 + 浏览器实测（插值采样/emoji 对象树断言/zoom 逐键/滤镜 A/B 像素对比/玩家移动碰撞/console 零错误）；新增 vitest 基建补齐 `npm test`。）
 - [x] 小镇编年史（2026-08-19：`server/world/chronicle.py` + engine 四节点接线——邀请接受/拒绝、路入加入、散场逐句全文、玩家单聊/群聊原话与回复，全部全文落盘 `saves/chronicle.jsonl`（JSONL、双时间戳、写失败只告警）。拒绝的邀约、被拒的加入这类"未成局"交互不写记忆、不入摘要，编年史是其唯一留痕处。零 LLM 成本、零 schema 改动。新增 6 测：JSONL 格式/中文原样/写失败不抛错 + 三个接线测（monkeypatch 记忆写入与 LLM，不污染真实 DB），57 测全绿 + ruff 干净。）
+- [x] 对话去 AI 味（2026-08-20：用户看编年史反馈"话语不拟人"。诊断出 6 病灶：口头禅复读（prefix 指令化）、舞台剧腔（括号/星号/第三人称旁白）、张冠李戴（模型替对方说话被归错人）、残场复读（解析失败→独白+复读强化）、骑墙表达（"小伙子（或小姑娘）"）、当面认错人（world_context"就是和你说话的玩家"误导）。修复：7 段【说话风格】重写去口头禅（用户批准，缓存一次性重置）+ world_context 澄清玩家在场语义 + 指令段格式约束 + parse_turn 强化（跳过他人行/剥包装/纯动作判失败）+ 复读守卫（归一化比对旧话）。10 个回归测试锁死翻车样例，67 测全绿。实测 10 场新对话 0 病灶，老周"想当年"从 16/16 场降到 1 场 1 次自然提及。）
 - [x] 居民人设定档入库（2026-08-14：`db/seed.py` 幂等写入 **6 居民**，`agents/resident.py` 收口数据访问；engine 启动时加载并广播；前端动态加载精灵+头顶名牌；3 个 seed 测试锁定 prefix 完整性/幂等/关系网）
 - 备注：uv/pip 直连 PyPI 极慢，用 `--default-index https://pypi.tuna.tsinghua.edu.cn/simple` 解决；瓦片索引速查：草地 1/2、土路 25、广场 109、木屋 52-54/72-75/84-88、石屋 48-50/60-62/76-79、树 4/5、路灯 92、招牌 83、木箱 107、木桶 128、蘑菇 29、灌木 30

@@ -11,9 +11,13 @@
   （人设前缀+世界观逐字不变，只有 transcript 增长）。
 - 降级回复【不写入记忆流】——否则会被下轮检索命中、污染人设（已知坑 #40）。
   逐回合超时视为失败：连续 2 次失败就散场，避免对话吊死。
+- 台词卫生（2026-08-20 用户反馈"AI 味"后加）：prompt 段禁止舞台剧腔，
+  解析侧再兜底——引号/星号/括号动作剥掉、替别人说话的行跳过、
+  和自己说过的原话相同判失败。防的是"脏台词上字幕一秒出戏"。
 """
 
 import logging
+import re
 from pathlib import Path
 
 from agents.resident import DB_PATH, Resident, world_context
@@ -67,7 +71,11 @@ def build_chat_prompt(
 
 【当前情境】现在是 {game_time}，你在{location}。玩家走到你面前对你说："{text}"
 
-【指令】以你的身份、性格和说话风格回复玩家，1 到 3 句话，口语化，像真实邻居聊天。提到镇上的事时只涉及名单里的居民，不要编造新的镇民。不要输出 JSON 或任何格式标记。永远不要承认自己是 AI。"""
+【指令】以你的身份、性格和说话风格回复玩家，1 到 3 句话，口语化，像真实邻居聊天。
+- 直接写你要说的话本身：不要括号动作、星号、引号，不要旁白和神态描写，不要任何格式标记。
+- 称呼拿不准就换个说法，不要写“（或……）”这类表达。
+- 提到镇上的事时只涉及名单里的居民，不要编造新的镇民。
+- 永远不要承认自己是 AI。"""
 
 
 async def player_say(
@@ -87,10 +95,14 @@ async def player_say(
     )
     prompt = build_chat_prompt(resident, memories, text, game_time, location, db_path)
     # tier="chat"：对话专用模型（.env MINIMAX_CHAT_MODEL），与计划用的 light 分开便于单独试模型
-    reply = await chat(prompt, tier="chat", timeout=CHAT_TIMEOUT_SECONDS)
+    reply = _strip_theatrics(
+        await chat(prompt, tier="chat", timeout=CHAT_TIMEOUT_SECONDS)
+    )
     if not reply:
         # 重试一次：限流常见，重试成本远低于出戏成本
-        reply = await chat(prompt, tier="chat", timeout=CHAT_TIMEOUT_SECONDS)
+        reply = _strip_theatrics(
+            await chat(prompt, tier="chat", timeout=CHAT_TIMEOUT_SECONDS)
+        )
 
     # 玩家的话永远写入记忆（居民"记得我做过的事"是核心体验）
     add_memory(
@@ -159,23 +171,94 @@ async def decide_join(
     return parse_yesno(raw)
 
 
-def parse_turn(raw: str, speaker_name: str) -> tuple[str, bool]:
+# ---------- 台词卫生（对着实测翻车样例设计的防线） ----------
+
+_QUOTE_PAIRS = {"“": "”", "「": "」", "『": "』", '"': '"'}
+
+
+def _starts_with_name(line: str, names: list[str] | tuple[str, ...]) -> bool:
+    """行是否以「某名字：」开头——名字可能是别人（模型偶尔替对方说话）。"""
+    for name in names:
+        for sep in ("：", ":"):
+            if line.startswith(f"{name}{sep}"):
+                return True
+    return False
+
+
+def _strip_theatrics(text: str) -> str:
+    """剥掉舞台剧包装，返回能当台词念的内容；纯动作返回空串。
+
+    prompt 已禁止动作/引号/星号，但小模型偶尔漂移，解析侧兜底比丢台词划算。
+    实测样例：「（端着一盘小餐包从后厨走出来）」整行旁白、
+    「“刚出炉的……”」引号包裹、「*压低声音*」星号动作。
+    """
+    t = text.strip()
+    while t:
+        if t[0] == "*":
+            end = t.find("*", 1)
+            if end == -1:
+                break
+            rest = t[end + 1 :].strip()
+            if not rest:
+                return ""  # 整行星号包住 → 纯动作，没台词
+            t = rest  # *动作*台词 → 剥掉动作块
+            continue
+        stripped = False
+        for open_q, close_q in _QUOTE_PAIRS.items():
+            if len(t) >= 2 and t[0] == open_q and t[-1] == close_q:
+                t = t[1:-1].strip()
+                stripped = True
+                break
+        if stripped:
+            continue
+        if t[0] in ("（", "("):
+            closes = [i for i in (t.find("）"), t.find(")")) if i > 0]
+            if closes:
+                t = t[min(closes) + 1 :].strip()  # 行首动作块剥掉；整行是动作则剩空
+                continue
+        break
+    return t
+
+
+def _norm_line(text: str) -> str:
+    """去标点空白后的归一化文本，用于复读比对（"心情很好哦～"≈"心情很好哦"）。"""
+    return re.sub(r"[\s，。！？、…—～~,.!?]", "", text)
+
+
+def parse_turn(
+    raw: str, speaker_name: str, other_names: list[str] | tuple[str, ...] = ()
+) -> tuple[str, bool]:
     """解析一句话回合：返回 (台词, 是否想结束对话)。
 
-    纯函数便于单测：模型说"结束"→结束；否则取首行并剥掉可能自带的"名字："前缀。
+    纯函数便于单测。防线按翻车样例设计：
+    - 模型替别人说话（"红姐：…"出现在你的回合）→ 跳过那行找自己的
+    - 纯动作/空行 → 看下一行；全都没台词 → 空串（引擎计失败）
+    - 舞台剧包装（引号/星号/行首括号动作）→ 剥掉
+    - "结束"→结束
     """
     if not raw:
         return "", False
-    line = raw.strip().splitlines()[0].strip()
-    # 剥掉模型可能自带的 "名字：" 前缀
-    for sep in ("：", ":"):
-        if line.startswith(f"{speaker_name}{sep}"):
-            line = line[len(speaker_name) + 1 :].strip()
-            break
-    # 想结束：模型按要求只回"结束"，容错处理也可能带标点
-    if line.replace("。", "").replace("！", "").strip() in ("结束", "不聊了", "告辞"):
-        return "", True
-    return line, False
+    for raw_line in raw.strip().splitlines():
+        line = raw_line.strip()
+        if not line or _starts_with_name(line, other_names):
+            continue
+        # 剥掉模型可能自带的 "自己名字：" 前缀
+        for sep in ("：", ":"):
+            if line.startswith(f"{speaker_name}{sep}"):
+                line = line[len(speaker_name) + 1 :].strip()
+                break
+        line = _strip_theatrics(line)
+        if not line:
+            continue  # 纯动作行 → 看下一行有没有台词
+        # 想结束：模型按要求只回"结束"，容错处理也可能带标点
+        if line.replace("。", "").replace("！", "").strip() in (
+            "结束",
+            "不聊了",
+            "告辞",
+        ):
+            return "", True
+        return line, False
+    return "", False
 
 
 async def conversation_turn(
@@ -195,15 +278,25 @@ async def conversation_turn(
 
 {world_context(db_path)}
 
-【当前情境】现在是 {game_time}，你在{location}，正和{others}聊天。
+【当前情境】现在是 {game_time}，你在{location}，正和{others}聊天——在场的就你们几个，没有别人。
 
 【对话记录】
 {transcript_lines}
 
-【指令】轮到你了。以你的性格和说话风格接一句话（口语，一两句就好）。
-如果你觉得聊得差不多了、该去忙自己的事了，就只回复两个字：结束。"""
+【指令】轮到你接话。只输出你说的一句话（口语，最多两句，总共不超过 40 字）。
+- 只说你自己的话，不要替{others}说话。
+- 直接写台词本身：不要括号动作、星号、引号，不要旁白和神态描写。
+- 顺着前面的话往前聊，别原地打转；不要重复这场对话里出现过的句子，也不要句句都往自己的职业和老本行上扯。
+- 觉得聊得差不多了、该去忙自己的事了，就只回复两个字：结束。"""
     raw = await chat(prompt, tier="chat", timeout=TURN_TIMEOUT_SECONDS)
-    return parse_turn(raw, speaker.name)
+    line, want_end = parse_turn(raw, speaker.name, other_names)
+    # 复读守卫：和自己在本场说过的原话相同 → 视作没接上（引擎累计失败，连败即散场）。
+    # 模型看到 transcript 里自己的旧话容易原样再抄（实测：阿茉一场里三连"心情很好哦"）。
+    if line:
+        said = {_norm_line(prev) for name, prev in transcript if name == speaker.name}
+        if _norm_line(line) in said:
+            return "", False
+    return line, want_end
 
 
 def parse_speaker_lines(raw: str, names: list[str]) -> list[tuple[str, str]]:
@@ -218,7 +311,7 @@ def parse_speaker_lines(raw: str, names: list[str]) -> list[tuple[str, str]]:
             matched = False
             for sep in ("：", ":"):
                 if line.startswith(f"{name}{sep}"):
-                    text = line[len(name) + 1 :].strip()
+                    text = _strip_theatrics(line[len(name) + 1 :].strip())
                     if text:
                         lines.append((name, text))
                     matched = True
@@ -250,8 +343,9 @@ async def player_join_reply(
 【对话记录】
 {transcript_lines}
 
-【指令】以在场居民各自的性格，写他们对玩家这句话的回应，1 到 2 句。
-格式严格为每行一句：名字：台词（名字只能是{others}）。不要输出任何其他内容。永远不要承认自己是 AI。"""
+【指令】以在场居民各自的性格，写他们对玩家这句话的回应，每人 1 到 2 句。
+格式严格为每行一句：名字：台词（名字只能是{others}）。
+台词只写说的话本身，不要括号动作、星号或引号。不要输出任何其他内容。永远不要承认自己是 AI。"""
     raw = await chat(prompt, tier="chat", timeout=GROUP_TIMEOUT_SECONDS)
     if not raw:
         logger.info("群聊回应生成失败，静默跳过")
