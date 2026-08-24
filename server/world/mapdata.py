@@ -20,7 +20,15 @@ MAP_JSON = (
     / "town_map.json"
 )
 
-_data = json.loads(MAP_JSON.read_text())
+try:
+    _data = json.loads(MAP_JSON.read_text(encoding="utf-8"))
+except (FileNotFoundError, json.JSONDecodeError) as exc:
+    # 模块级读取：缺失时原本抛裸 FileNotFoundError，排查体验差。
+    # 换地图/新环境克隆后最常见的问题，给出生成指令（2026-08-21 深检加固）。
+    raise RuntimeError(
+        f"共享地图数据不可用（{MAP_JSON}）。请先运行 "
+        "`cd client && node scripts/convert_aitown_map.mjs` 生成后重启后端"
+    ) from exc
 COLS: int = _data["cols"]
 ROWS: int = _data["rows"]
 TILE_SIZE: int = _data["tileDim"]

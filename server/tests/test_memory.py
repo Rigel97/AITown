@@ -10,7 +10,13 @@ from pathlib import Path
 import pytest
 
 from memory.retrieve import retrieve
-from memory.store import add_memory, extract_keywords, get_recent_memories
+from memory.store import (
+    IMPORTANT_MEMORY_THRESHOLD,
+    add_memory,
+    extract_keywords,
+    get_important_memories,
+    get_recent_memories,
+)
 from world.clock import parse_game_time
 
 SCHEMA = Path(__file__).resolve().parents[1] / "db" / "schema.sql"
@@ -100,3 +106,43 @@ def test_retrieve_returns_at_most_k(tmp_path: Path) -> None:
         add_memory("baker_lin", f"day5-08:{i:02d}", "observation", f"琐事{i}", 3, db)
 
     assert len(retrieve("baker_lin", query="", now_minutes=NOW, k=3, db_path=db)) == 3
+
+
+# ---------- 检索双通道（2026-08-21 深检：近因窗口曾把老玩家互动永久埋掉） ----------
+
+
+def test_get_important_memories_filters_by_threshold(tmp_path: Path) -> None:
+    db = _fresh_db(tmp_path)
+    add_memory(
+        "baker_lin", "day1-08:00", "dialogue", "玩家对我说：「常来买面包」", 6, db
+    )
+    add_memory("baker_lin", "day1-09:00", "reflection", "今天心情不错", 8, db)
+    add_memory("baker_lin", "day1-10:00", "observation", "擦了擦柜台", 5, db)
+    add_memory("baker_lin", "day1-11:00", "event", "制定了今天的计划", 3, db)
+
+    important = get_important_memories("baker_lin", db_path=db)
+    assert {m.importance for m in important} == {6, 8}
+    assert IMPORTANT_MEMORY_THRESHOLD == 6  # 玩家互动（6）是最低门槛
+
+
+def test_retrieve_finds_old_player_memory_beyond_recent_window(tmp_path: Path) -> None:
+    """Bug E：早期与玩家的互动（importance 6）被大量琐事刷出近因窗口后，
+    仍必须能被检索到——"居民记得玩家"是核心体验，不能只活在最近 100 条里。"""
+    db = _fresh_db(tmp_path)
+    # 第 1 天：玩家说了句重要的话（带可检索关键词）
+    add_memory(
+        "baker_lin",
+        "day1-08:00",
+        "dialogue",
+        "玩家对我说：「以后每天都来买面包」",
+        6,
+        db,
+    )
+    # 第 5 天：150 条琐碎日常把近因窗口（默认 100 条）全部占满
+    for i in range(150):
+        add_memory(
+            "baker_lin", f"day5-08:{i % 60:02d}", "observation", f"琐事{i}", 1, db
+        )
+
+    top = retrieve("baker_lin", query="面包", now_minutes=NOW, k=3, db_path=db)
+    assert any("玩家" in m.content for m in top), "老玩家互动被近因窗口永久埋掉了"

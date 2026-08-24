@@ -22,6 +22,13 @@ DB_PATH = Path(__file__).resolve().parents[1] / "db" / "aitown.db"
 
 MemoryType = Literal["observation", "dialogue", "event", "reflection"]
 
+# 重要记忆门槛：玩家互动（importance 6）与反思（8）必须穿透近因窗口被检索到。
+# 自己的日常回复/对话摘要（5）与计划（3）不进来——防刷屏。
+# 为什么重要：retrieve 只在"最近 N 条"里打分，玩家连续聊几天后早期互动会
+# 永久沉底、再也想不起来——"居民记得玩家做过的事"是核心体验（2026-08-21
+# 深检：实测每人 ~950 条记忆，100 条窗口只能覆盖最近 2-3 个游戏日）。
+IMPORTANT_MEMORY_THRESHOLD = 6
+
 # 关键词词表：小镇的全部实体。新居民/新建筑定档时必须同步进来，
 # 否则相关内容检索不到（test_seed 里有关系网断言兜底人设，词表靠这份清单维护）。
 DEFAULT_VOCABULARY = [
@@ -92,6 +99,19 @@ def add_memory(
         return cursor.lastrowid or 0
 
 
+def _row_to_memory(row: tuple) -> Memory:
+    """SELECT 结果行 → Memory（三个查询共用的映射，收口一处）。"""
+    return Memory(
+        id=row[0],
+        resident_id=row[1],
+        game_time=row[2],
+        type=row[3],
+        content=row[4],
+        importance=row[5],
+        keywords=(row[6] or "").split(),
+    )
+
+
 def get_memories_of_day(
     resident_id: str,
     day: int,
@@ -108,18 +128,7 @@ def get_memories_of_day(
             """,
             (resident_id, f"day{day}-%"),
         ).fetchall()
-    return [
-        Memory(
-            id=row[0],
-            resident_id=row[1],
-            game_time=row[2],
-            type=row[3],
-            content=row[4],
-            importance=row[5],
-            keywords=(row[6] or "").split(),
-        )
-        for row in rows
-    ]
+    return [_row_to_memory(row) for row in rows]
 
 
 def get_recent_memories(
@@ -139,15 +148,29 @@ def get_recent_memories(
             """,
             (resident_id, limit),
         ).fetchall()
-    return [
-        Memory(
-            id=row[0],
-            resident_id=row[1],
-            game_time=row[2],
-            type=row[3],
-            content=row[4],
-            importance=row[5],
-            keywords=(row[6] or "").split(),
-        )
-        for row in rows
-    ]
+    return [_row_to_memory(row) for row in rows]
+
+
+def get_important_memories(
+    resident_id: str,
+    min_importance: int = IMPORTANT_MEMORY_THRESHOLD,
+    limit: int = 500,
+    db_path: Path = DB_PATH,
+) -> list[Memory]:
+    """取高重要度记忆（不限近因窗口）——检索双通道之一。
+
+    idx_memories_importance 索引现成，成本近零。limit 只是防御性上限：
+    打分在内存做、Prompt 只取 Top-K，候选集大小不影响调用成本。
+    """
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, resident_id, game_time, type, content, importance, keywords
+            FROM memories
+            WHERE resident_id = ? AND importance >= ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (resident_id, min_importance, limit),
+        ).fetchall()
+    return [_row_to_memory(row) for row in rows]

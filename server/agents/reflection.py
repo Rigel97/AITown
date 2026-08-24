@@ -15,12 +15,36 @@ from pathlib import Path
 
 from agents.resident import DB_PATH, Resident, world_context
 from llm.client import chat
-from memory.store import add_memory, get_memories_of_day
+from memory.store import (
+    IMPORTANT_MEMORY_THRESHOLD,
+    add_memory,
+    get_memories_of_day,
+)
 
 logger = logging.getLogger(__name__)
 
 REFLECT_TIMEOUT_SECONDS = 60.0  # M3 反思可慢，后台任务不阻塞玩家
 MAX_REFLECTIONS = 2  # 每晚最多 2 条，避免写太多稀释记忆流
+# 反思注入的记忆上限：全量注入会让 M3 prompt 无限膨胀（聊天多的日子一天
+# 50–200 条），token 翻倍、60s 超时率上升——最贵的一层最先被拖垮。
+# 截断策略与检索双通道同思想：近因 tail ∪ 高重要度，玩家相关的记忆不丢。
+REFLECTION_MEMORY_LIMIT = 40
+
+
+def _trim_for_reflection(memories: list) -> list:
+    """注入 prompt 前截断：最近 REFLECTION_MEMORY_LIMIT 条 ∪ 当日 importance≥6 的全部。
+
+    两集合合并后按 id 升序（≈时间序）输出；高重要度记忆（玩家互动 6/
+    反思 8）即使落在近因窗口外也保留——反思丢掉玩家的白天互动等于白反思。
+    """
+    tail = memories[-REFLECTION_MEMORY_LIMIT:]
+    tail_ids = {m.id for m in tail}
+    important = [
+        m
+        for m in memories
+        if m.importance >= IMPORTANT_MEMORY_THRESHOLD and m.id not in tail_ids
+    ]
+    return sorted([*tail, *important], key=lambda m: m.id)
 
 
 def parse_reflections(raw: str) -> list[str]:
@@ -69,10 +93,18 @@ async def reflect(
     day: int,
     db_path: Path = DB_PATH,
 ) -> int:
-    """对居民生成每日反思，写回记忆流。返回写入条数（0 表示失败/超时）。"""
-    memories = get_memories_of_day(resident.id, day, db_path)
+    """对居民生成每日反思，写回记忆流。返回写入条数（0 表示失败/超时）。
+
+    重试一次（四轮 G3）：反思一晚只有一次机会，reflected_day 在 gather
+    结束后无论成败都会推进——这里不重试，一次超时就永久丢掉这一天的
+    高层认知（planner/player_say 都是同款重试待遇）。
+    """
+    memories = _trim_for_reflection(get_memories_of_day(resident.id, day, db_path))
     prompt = build_reflection_prompt(resident, memories, game_time, db_path)
     raw = await chat(prompt, tier="flagship", timeout=REFLECT_TIMEOUT_SECONDS)
+    if not raw:
+        logger.info("反思超时/失败，重试一次（%s）", resident.id)
+        raw = await chat(prompt, tier="flagship", timeout=REFLECT_TIMEOUT_SECONDS)
     insights = parse_reflections(raw)
     if not insights:
         logger.info("反思生成失败/为空，静默跳过（%s）", resident.id)

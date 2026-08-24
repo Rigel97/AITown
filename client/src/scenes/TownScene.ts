@@ -24,7 +24,14 @@ import Phaser from "phaser";
 import { NetClient, type ServerMessage } from "../net/client";
 import { Hud } from "../ui/hud";
 import { actionEmoji } from "../world/actionEmoji";
-import { CHARACTER_INDEX, FOLK_FRAME, PLAYER_CHARACTER, walkFrames, type Direction } from "../world/mapData";
+import {
+  CHARACTER_INDEX,
+  FOLK_FRAME,
+  PLAYER_CHARACTER,
+  walkFrames,
+  withinChebyshevTiles,
+  type Direction,
+} from "../world/mapData";
 
 interface TownMapData {
   cols: number;
@@ -44,7 +51,9 @@ const CAMERA_ZOOMS = [2, 1.5, 1] as const;
 const ZOOM_KEYS = ["ONE", "TWO", "THREE"] as const;
 const DEFAULT_ZOOM_INDEX = 0;
 const MOVE_REPORT_INTERVAL_MS = 100;
-const CHAT_RANGE_PX = FOLK_FRAME * 3 + 8; // 与服务端 CHAT_RANGE_TILES 对齐
+// 与服务端 engine.CHAT_RANGE_TILES 对齐：瓦片切比雪夫距离，同一套几何
+// （旧版用像素欧氏距离，边界处与服务端判定错位，出现"有提示却 too_far"）
+const CHAT_RANGE_TILES = 3;
 const PLAYER_SPEED = 110; // 像素/秒
 
 // —— 居民插值参数 ——
@@ -92,6 +101,8 @@ export class TownScene extends Phaser.Scene {
   private warmFilter: Phaser.Filters.ColorMatrix | null = null;
   private warmOn = true;
   private gameTimeLabel = "";
+  /** 首次 world_state 是否已把玩家贴齐到服务端位置（之后客户端权威，忽略） */
+  private playerSynced = false;
 
   constructor() {
     super("TownScene");
@@ -200,7 +211,12 @@ export class TownScene extends Phaser.Scene {
     this.net = new NetClient(
       "ws://localhost:8000/ws",
       (msg) => this.onServerMessage(msg),
-      () => this.refreshStatusText(),
+      () => {
+        // 重连（含首次连接）：状态栏刷新 + 清空全部"正在想…"占位符——
+        // 断线期间在途的回复永远不会到达，占位符不清会永久挂死
+        this.refreshStatusText();
+        this.hud.hideThinking();
+      },
     );
     this.net.connect();
   }
@@ -240,7 +256,10 @@ export class TownScene extends Phaser.Scene {
       const dir = this.dirFromInput(dx, dy);
       this.playAnim(this.player, "walk", dir);
       if (time - this.lastReportAt > MOVE_REPORT_INTERVAL_MS) {
-        this.net.send("player_move", { x: Math.round(this.player.x), y: Math.round(this.player.y) });
+        this.net.send("player_move", {
+          x: Math.round(this.player.x),
+          y: Math.round(this.player.y),
+        });
         this.lastReportAt = time;
       }
     } else {
@@ -250,10 +269,7 @@ export class TownScene extends Phaser.Scene {
 
     // 走近提示：最近的居民在对话范围内（附当前动作，让"正在干嘛"近看也有）
     const nearest = this.nearestResident();
-    if (
-      nearest &&
-      Phaser.Math.Distance.Between(this.player.x, this.player.y, nearest.sprite.x, nearest.sprite.y) <= CHAT_RANGE_PX
-    ) {
+    if (nearest && this.inChatRange(nearest)) {
       if (this.chattingIds.has(nearest.id)) {
         this.hud.setHint(`按 Enter 加入 ${nearest.name} 的对话`);
       } else {
@@ -355,7 +371,12 @@ export class TownScene extends Phaser.Scene {
     let best: ResidentVisual | null = null;
     let bestDist = Infinity;
     for (const rv of this.residents.values()) {
-      const d = Phaser.Math.Distance.Squared(this.player.x, this.player.y, rv.sprite.x, rv.sprite.y);
+      const d = Phaser.Math.Distance.Squared(
+        this.player.x,
+        this.player.y,
+        rv.sprite.x,
+        rv.sprite.y,
+      );
       if (d < bestDist) {
         bestDist = d;
         best = rv;
@@ -364,15 +385,30 @@ export class TownScene extends Phaser.Scene {
     return best;
   }
 
+  /** 与服务端同几何的对话距离判定（详见 mapData.withinChebyshevTiles）。
+   * 用居民精灵插值位置算格：移动中可能与服务端权威格差 1 格，属可接受的瞬时误差。 */
+  private inChatRange(resident: ResidentVisual): boolean {
+    return withinChebyshevTiles(
+      this.player.x,
+      this.player.y,
+      resident.sprite.x,
+      resident.sprite.y,
+      this.tileDim,
+      CHAT_RANGE_TILES,
+    );
+  }
+
   private tryOpenChat(): void {
     if (this.hud.isChatOpen) return;
     const nearest = this.nearestResident();
     if (!nearest) return;
-    const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, nearest.sprite.x, nearest.sprite.y);
-    if (dist > CHAT_RANGE_PX) return;
+    if (!this.inChatRange(nearest)) return;
     this.chatTarget = nearest.id;
     const groupChat = this.chattingIds.has(nearest.id);
-    this.hud.openChat(nearest.id, groupChat ? `加入 ${nearest.name} 的对话` : `和 ${nearest.name} 聊天`);
+    this.hud.openChat(
+      nearest.id,
+      groupChat ? `加入 ${nearest.name} 的对话` : `和 ${nearest.name} 聊天`,
+    );
   }
 
   private sendChat(text: string): void {
@@ -385,21 +421,39 @@ export class TownScene extends Phaser.Scene {
     if (msg.type === "world_state") {
       this.gameTimeLabel = String(msg.payload.game_time);
       this.refreshStatusText();
+      // 首次同步：把玩家贴齐到服务端记忆的位置（读档/刷新页面不瞬移回出生点）。
+      // 只做一次——之后是客户端权威移动，每秒广播的服务端镜像不再反写本地
+      const p = msg.payload.player as { x?: unknown; y?: unknown } | undefined;
+      if (!this.playerSynced && p && typeof p.x === "number" && typeof p.y === "number") {
+        this.playerSynced = true;
+        this.player.setPosition(p.x, p.y);
+      }
       const residents = (msg.payload.residents ?? []) as Array<Record<string, unknown>>;
       for (const r of residents) this.syncResident(r);
     } else if (msg.type === "chat_reply") {
       const id = String(msg.payload.resident_id);
-      this.hud.hideThinking();
-      // 群聊可能多句，逐句入面板；一对一仍是单句
+      // 群聊可能多句，逐句入面板（“正在想”占位符由 addChatLine 精确移除，
+      // 不能全局清：同时对两人说话时，B 的回复不能误删 A 的占位）
       const lines = (msg.payload.lines ?? []) as Array<[string, string]>;
       for (const [speaker, text] of lines) {
         this.hud.addChatLine(id, speaker, text);
       }
     } else if (msg.type === "event_log") {
       this.hud.addEvent(String(msg.payload.game_time), String(msg.payload.text));
+    } else if (msg.type === "save_ack") {
+      // 存档确认（WS "save" 的回包；日常存档靠服务端 autosave，无需消息）
+      const ok = Boolean(msg.payload.ok);
+      const gameTime = String(msg.payload.game_time ?? "");
+      this.hud.flashHint(ok ? `已存档（${gameTime}）` : "存档失败，稍后再试", 2500);
     } else if (msg.type === "error") {
+      // 错误到达 = 这句话不会有回复了：占位符必须撤掉，
+      // 否则“正在想…”永久挂死（旧版 too_far 就有这个问题）
+      this.hud.hideThinking(this.chatTarget);
       const code = String(msg.payload.code ?? "");
-      if (code === "too_far") this.hud.setHint("太远了，走过去再说");
+      // flashHint：面板打开时 update 每帧 setHint(null)，普通 hint 会被
+      // 立即盖掉，错误反馈必须走 TTL 临时通道
+      if (code === "too_far") this.hud.flashHint("太远了，走过去再说", 2500);
+      else if (code === "cooldown") this.hud.flashHint("话音刚落，缓一缓再说", 2500);
       else console.warn("server error:", msg.payload);
     }
   }
@@ -426,12 +480,18 @@ export class TownScene extends Phaser.Scene {
       sprite.setData("dir", "down");
       // 头顶名牌：大字号 + scale 缩小，跟随居民世界坐标
       const label = this.add
-        .text(x, y - LABEL_OFFSET_Y, name, { fontSize: "18px", color: "#1a2f0e", backgroundColor: "rgba(255,248,231,0.7)" })
+        .text(x, y - LABEL_OFFSET_Y, name, {
+          fontSize: "18px",
+          color: "#1a2f0e",
+          backgroundColor: "rgba(255,248,231,0.7)",
+        })
         .setOrigin(0.5, 1)
         .setScale(0.5);
       rv = { id, name, sprite, label, target: { x, y }, action, emoji: "", moving: false };
       this.residents.set(id, rv);
-    } else if (Phaser.Math.Distance.Between(rv.sprite.x, rv.sprite.y, x, y) > RESIDENT_SNAP_DISTANCE) {
+    } else if (
+      Phaser.Math.Distance.Between(rv.sprite.x, rv.sprite.y, x, y) > RESIDENT_SNAP_DISTANCE
+    ) {
       // 断线重连/瞬移：直接贴齐，不插值（否则居民会横穿全图）
       rv.sprite.setPosition(x, y);
       rv.target = { x, y };

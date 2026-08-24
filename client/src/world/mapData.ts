@@ -35,7 +35,20 @@ export function walkFrames(charIndex: number, dir: Direction): number[] {
   return [base, base + 1, base + 2];
 }
 
-/** 站立帧 = 行走序列第一帧 */
-export function idleFrame(charIndex: number, dir: Direction = "down"): number {
-  return walkFrames(charIndex, dir)[0];
+/**
+ * 瓦片切比雪夫距离 ≤ range：与后端 world.mapdata.to_tile + engine.CHAT_RANGE_TILES
+ * 同几何。对话距离判定前后端必须一致——旧版前端用像素欧氏距离，边界处
+ * 会出现"有提示却 too_far"的错位（2026-08-21 深检发现）。
+ */
+export function withinChebyshevTiles(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  tileDim: number,
+  rangeTiles: number,
+): boolean {
+  const dx = Math.abs(Math.floor(x1 / tileDim) - Math.floor(x2 / tileDim));
+  const dy = Math.abs(Math.floor(y1 / tileDim) - Math.floor(y2 / tileDim));
+  return Math.max(dx, dy) <= rangeTiles;
 }

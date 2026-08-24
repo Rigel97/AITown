@@ -15,7 +15,7 @@ import logging
 import os
 import re
 import time
-from typing import Literal
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
@@ -37,6 +37,27 @@ _client = AsyncOpenAI(
     base_url=os.getenv("MINIMAX_BASE_URL", "https://api.minimaxi.com/v1"),
 )
 
+# ---------- 熔断器（成本安全阀，2026-08-21 深检 T） ----------
+# MiniMax 持续故障（key 失效/额度耗尽/服务不可用）时，无限重试只会白烧钱
+# 且拖慢所有对话。连续失败达阈值 → 暂停调用一段时间，期间一切降级处理；
+# 冷却后自动半开重试（成功则清零计数）。
+BREAKER_FAILURE_THRESHOLD = 5
+BREAKER_COOLDOWN_SECONDS = 60.0
+_consecutive_failures = 0
+_breaker_open_until = 0.0  # time.monotonic 时刻；在此之前所有调用直接降级
+
+# ---------- 用量统计（W4 成本校准的数据源） ----------
+# 目标"单游戏日 ≤ ¥2.1"的唯一度量：缓存命中率 = cached_tokens / prompt_tokens。
+# 进程内存累计（重启归零）——MVP 不入库，够 W4 校准用。
+_usage_totals: dict[str, Any] = {
+    "calls": 0,
+    "failures": 0,
+    "prompt_tokens": 0,
+    "cached_tokens": 0,
+    "completion_tokens": 0,
+    "by_tier": {},
+}
+
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
 
@@ -49,6 +70,56 @@ def _strip_think(content: str) -> str:
     return _THINK_RE.sub("", content).strip()
 
 
+def usage_stats() -> dict[str, Any]:
+    """累计 LLM 用量快照（深拷贝，避免调用方篡改内部计数）。"""
+    return {
+        "calls": _usage_totals["calls"],
+        "failures": _usage_totals["failures"],
+        "prompt_tokens": _usage_totals["prompt_tokens"],
+        "cached_tokens": _usage_totals["cached_tokens"],
+        "completion_tokens": _usage_totals["completion_tokens"],
+        "by_tier": {
+            tier: dict(stat) for tier, stat in _usage_totals["by_tier"].items()
+        },
+    }
+
+
+def _record_usage(tier: str, model: str, usage: Any) -> None:
+    """累计一次成功调用的 token 用量；usage 缺字段时按 0 处理（兼容格式差异）。"""
+    prompt = getattr(usage, "prompt_tokens", None) or 0
+    completion = getattr(usage, "completion_tokens", None) or 0
+    # cached_tokens 兼容两种返回格式：OpenAI 风格挂在 prompt_tokens_details，
+    # 或直接挂在 usage 上（MiniMax 文档两种都出现过）
+    cached = getattr(
+        getattr(usage, "prompt_tokens_details", None), "cached_tokens", None
+    )
+    if cached is None:
+        cached = getattr(usage, "cached_tokens", None)
+    cached = cached or 0
+
+    totals = _usage_totals
+    totals["calls"] += 1
+    totals["prompt_tokens"] += prompt
+    totals["cached_tokens"] += cached
+    totals["completion_tokens"] += completion
+    tier_stat = totals["by_tier"].setdefault(
+        tier,
+        {"calls": 0, "prompt_tokens": 0, "cached_tokens": 0, "completion_tokens": 0},
+    )
+    tier_stat["calls"] += 1
+    tier_stat["prompt_tokens"] += prompt
+    tier_stat["cached_tokens"] += cached
+    tier_stat["completion_tokens"] += completion
+    logger.info(
+        "LLM usage: tier=%s model=%s prompt=%d cached=%d completion=%d",
+        tier,
+        model,
+        prompt,
+        cached,
+        completion,
+    )
+
+
 async def chat(
     prompt: str,
     tier: Literal["light", "flagship", "chat"] = "light",
@@ -59,7 +130,11 @@ async def chat(
     timeout 默认 CHAT_TIMEOUT_SECONDS（4.5s，保玩家对话 < 5s 目标）；
     后台任务（计划/反思）无硬延迟要求，调用方应显式传更长的值——
     M2.7 带 think 块，长输出在 4.5s 内铁定超时（2026-08-17 实测）。
+    熔断打开期间直接返回空串（成本安全阀，见 BREAKER_* 注释）。
     """
+    global _consecutive_failures, _breaker_open_until
+    if time.monotonic() < _breaker_open_until:
+        return ""
     model = {"light": LIGHT_MODEL, "flagship": FLAGSHIP_MODEL, "chat": CHAT_MODEL}[tier]
     try:
         resp = await _client.chat.completions.create(
@@ -67,8 +142,21 @@ async def chat(
             messages=[{"role": "user", "content": prompt}],
             timeout=timeout if timeout is not None else CHAT_TIMEOUT_SECONDS,
         )
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            _record_usage(tier, model, usage)
+        _consecutive_failures = 0
         return _strip_think(resp.choices[0].message.content or "")
     except Exception:
+        _usage_totals["failures"] += 1
+        _consecutive_failures += 1
+        if _consecutive_failures >= BREAKER_FAILURE_THRESHOLD:
+            _breaker_open_until = time.monotonic() + BREAKER_COOLDOWN_SECONDS
+            logger.error(
+                "LLM 连续失败 %d 次，熔断 %0.0f 秒（期间全部调用直接降级）",
+                _consecutive_failures,
+                BREAKER_COOLDOWN_SECONDS,
+            )
         logger.exception("LLM call failed (tier=%s, model=%s)", tier, model)
         return ""
 

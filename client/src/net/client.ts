@@ -7,6 +7,15 @@ export interface ServerMessage {
   payload: Record<string, unknown>;
 }
 
+/** 运行时消息校验（AGENTS.md 类型安全约定）：type 是字符串、payload 是对象 */
+function isServerMessage(value: unknown): value is ServerMessage {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.type === "string" && typeof record.payload === "object" && record.payload !== null
+  );
+}
+
 export class NetClient {
   private ws: WebSocket | null = null;
   private readonly retryDelayMs = 1000;
@@ -14,11 +23,7 @@ export class NetClient {
   private readonly onMessage: (msg: ServerMessage) => void;
   private readonly onOpen: () => void;
 
-  constructor(
-    url: string,
-    onMessage: (msg: ServerMessage) => void,
-    onOpen: () => void = () => {},
-  ) {
+  constructor(url: string, onMessage: (msg: ServerMessage) => void, onOpen: () => void = () => {}) {
     this.url = url;
     this.onMessage = onMessage;
     this.onOpen = onOpen;
@@ -28,9 +33,18 @@ export class NetClient {
     this.ws = new WebSocket(this.url);
     this.ws.onopen = () => this.onOpen();
     this.ws.onmessage = (event) => {
-      // TODO(W2): 加运行时消息校验（AGENTS.md 类型安全约定）
-      const msg = JSON.parse(event.data as string) as ServerMessage;
-      this.onMessage(msg);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(event.data as string);
+      } catch {
+        console.warn("收到无法解析的服务器消息，已忽略");
+        return;
+      }
+      if (!isServerMessage(parsed)) {
+        console.warn("收到不符合协议的消息，已忽略:", parsed);
+        return;
+      }
+      this.onMessage(parsed);
     };
     this.ws.onclose = () => {
       // 简单重连：本地开发够用，断线 1 秒后重试

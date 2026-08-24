@@ -16,6 +16,7 @@
   和自己说过的原话相同判失败。防的是"脏台词上字幕一秒出戏"。
 """
 
+import hashlib
 import logging
 import re
 from pathlib import Path
@@ -35,19 +36,45 @@ TURN_TIMEOUT_SECONDS = 12.0
 # 群聊回应超时
 GROUP_TIMEOUT_SECONDS = 15.0
 
-# 降级托词池：多条轮换，避免同一句反复出现瞬间出戏
+# 降级托词池：多条轮换，避免同一句反复出现瞬间出戏。
+# 写作约束（2026-08-22 四轮 G1）：①纯台词无括号动作——台词卫生规则要求
+# LLM 回复剥括号，降级文案自己违规就是双标；②年龄/性别中性——"人上了
+# 年纪耳朵背"给学徒少年说直接崩人设，托词池是全员共用的。
 FALLBACK_REPLIES = [
-    "（愣了一下）哎呀，你刚才说什么？我这走神了。",
-    "（挠挠头）等会儿等会儿，我脑子刚飞到别处去了……再说一遍？",
-    "（笑了笑）哎，人上了年纪耳朵背，你大点声再说一次？",
-    "（忙着手里的事）稍等稍等……你刚说啥来着？",
-    "（回过神来）嗯？你是在跟我说话吗？",
+    "哎呀，你刚才说什么？我这一走神没听清。",
+    "等等等等，再说一遍？我脑子里刚在想别的事。",
+    "嗯？你是在跟我说话吗？不好意思，没接上。",
+    "稍等稍等……你刚说啥来着？让我回个神。",
+    "刚才想事想得太入神了，你再说一遍？",
 ]
+
+# 出戏防线（四轮 G2）：玩家试探"你是不是 AI"时，动态指令段追加提醒。
+# 只拼在指令段（动态区）——prefix 与 world_context 逐字不变，缓存零影响。
+# 拉丁词必须词边界匹配："wait"/"said" 含子串 ai，简单 in 会误触发。
+_LATIN_PROBE_RE = re.compile(r"\b(?:ai|gpt|llm|npc)|chatgpt", re.IGNORECASE)
+_ZH_PROBE_WORDS = ("人工智能", "语言模型", "大模型", "模型", "机器人")
+
+
+def anti_ai_guard(player_text: str) -> str:
+    """玩家文本含 AI/模型类试探词时，返回要拼进指令段的防线行；否则空串。"""
+    if _LATIN_PROBE_RE.search(player_text) or any(
+        w in player_text for w in _ZH_PROBE_WORDS
+    ):
+        return (
+            "\n- 如果对方说你是 AI、模型、程序或角色，你别顺着接也别解释原理，"
+            "你就是活生生的小镇居民，困惑地否认或岔开话题就好。"
+        )
+    return ""
 
 
 def _fallback_for(resident_id: str, text: str) -> str:
-    """按居民+内容稳定选一条托词：同人同话同托词，不同人不同托词。"""
-    return FALLBACK_REPLIES[hash((resident_id, text)) % len(FALLBACK_REPLIES)]
+    """按居民+内容稳定选一条托词：同人同话同托词，跨进程/重启也稳定。
+
+    旧版用内建 hash，受 PYTHONHASHSEED 随机化影响每次重启换托词
+    （2026-08-21 深检加固）；sha256 是稳定分发，且与字符串内容解耦。
+    """
+    digest = hashlib.sha256(f"{resident_id}\0{text}".encode()).digest()
+    return FALLBACK_REPLIES[digest[0] % len(FALLBACK_REPLIES)]
 
 
 def build_chat_prompt(
@@ -75,7 +102,7 @@ def build_chat_prompt(
 - 直接写你要说的话本身：不要括号动作、星号、引号，不要旁白和神态描写，不要任何格式标记。
 - 称呼拿不准就换个说法，不要写“（或……）”这类表达。
 - 提到镇上的事时只涉及名单里的居民，不要编造新的镇民。
-- 永远不要承认自己是 AI。"""
+- 永远不要承认自己是 AI。{anti_ai_guard(text)}"""
 
 
 async def player_say(
@@ -85,7 +112,12 @@ async def player_say(
     location: str,
     db_path: Path = DB_PATH,
 ) -> str:
-    """玩家对居民说话 → 返回居民的回复。对话写入居民的记忆流。"""
+    """玩家对居民说话 → 返回居民的回复（LLM 失败返回空串）。
+
+    降级托词由 engine 统一给出（不入记忆的规则也由那边统一执行）——
+    本函数只负责"生成回复 + 写真实记忆"，职责更纯粹。
+    对话写入居民的记忆流。
+    """
     memories = retrieve(
         resident.id,
         query=text,
@@ -113,9 +145,7 @@ async def player_say(
             resident.id, game_time, "dialogue", f"我回答玩家：「{reply}」", 5, db_path
         )
     else:
-        # 降级托词不入记忆流：避免被下轮检索命中污染人设
-        logger.warning("对话两次超时，降级托词（%s）", resident.id)
-        reply = _fallback_for(resident.id, text)
+        logger.warning("对话两次超时，交由引擎降级（%s）", resident.id)
     return reply
 
 
@@ -123,11 +153,19 @@ async def player_say(
 
 
 def parse_yesno(raw: str) -> bool:
-    """判定 LLM 是否表示同意。只认肯定词，否定一律算不。"""
+    """判定 LLM 是否表示同意：否定优先，其余按肯定词表判定。
+
+    只认"会/好/行"三个字时，"当然会/嗯，聊两句"这类自然短语会被误判成
+    拒绝——一次误判 = 一场本该发生的对话没了（涌现叙事的直接损失）。
+    否定词优先检查："不行/别打扰我/没空"哪怕带肯定字也是拒绝。
+    "X不X"句式（来不了/聊不了）靠避开 "来/聊/去" 这类歧义开头规避。
+    """
     if not raw:
         return False
-    head = raw.strip().splitlines()[0]
-    return head.startswith(("会", "好", "行"))
+    head = _strip_theatrics(raw.strip().splitlines()[0])
+    if head.startswith(("不", "别", "没", "算了")):
+        return False
+    return head.startswith(("会", "好", "行", "当然", "嗯", "可以", "成"))
 
 
 async def decide_accept(
@@ -269,7 +307,27 @@ async def conversation_turn(
     location: str,
     db_path: Path = DB_PATH,
 ) -> tuple[str, bool]:
-    """对话中说话者的下一回合。返回 (台词, 是否想结束)。"""
+    """对话中说话者的下一回合。返回 (台词, 是否想结束)。
+
+    记忆注入（2026-08-22 三轮优化 F1）：检索词 = 同伴名 + 最近话题——
+    与"玩家的话是最好的检索词"同款设计。没有这层时居民-居民对话是
+    "失忆"的：上次散场明明写了摘要（importance 5），二次相遇却想不起
+    来——而玩家单聊/群聊/计划/反思全都有检索，唯独涌现叙事主来源的
+    居民对话没有。k=3：transcript 已含本场上下文，记忆只需少量
+    "场外信息"（上次聊过什么/最近的玩家互动）。
+    """
+    query = " ".join([*other_names, *(t for _, t in transcript[-3:])])
+    memories = retrieve(
+        speaker.id,
+        query=query,
+        now_minutes=parse_game_time(game_time),
+        k=3,
+        db_path=db_path,
+    )
+    if memories:
+        mem_lines = "\n".join(f"- ({m.game_time}) {m.content}" for m in memories)
+    else:
+        mem_lines = "（没想起什么相关的事）"
     others = "、".join(other_names)
     transcript_lines = (
         "\n".join(f"{n}：{t}" for n, t in transcript) or "（刚碰上，还没说话）"
@@ -277,6 +335,9 @@ async def conversation_turn(
     prompt = f"""{speaker.prompt_prefix}
 
 {world_context(db_path)}
+
+【你记得的事】
+{mem_lines}
 
 【当前情境】现在是 {game_time}，你在{location}，正和{others}聊天——在场的就你们几个，没有别人。
 
@@ -329,12 +390,35 @@ async def player_join_reply(
     location: str,
     db_path: Path = DB_PATH,
 ) -> list[tuple[str, str]]:
-    """玩家加入对话后的群体回应。一次调用生成 1–2 句回复（在场居民各一句）。"""
+    """玩家加入对话后的群体回应。一次调用生成 1–2 句回复（在场居民各一句）。
+
+    记忆按人注入（各自 Top-2）：群聊不能"集体失忆"——单聊记得玩家的事，
+    群聊里也得记得，两条路径只差 prompt 组装，不该差"记不记得"
+    （2026-08-22 优化 A2）。
+    """
     names = [p.name for p in participants]
     transcript_lines = "\n".join(f"{n}：{t}" for n, t in transcript) or "（刚开始聊）"
     personas = "\n\n".join(f"【{p.name}】{p.prompt_prefix}" for p in participants)
     others = "、".join(names)
+    memory_blocks: list[str] = []
+    for p in participants:
+        mems = retrieve(
+            p.id,
+            query=player_text,
+            now_minutes=parse_game_time(game_time),
+            k=2,
+            db_path=db_path,
+        )
+        if mems:
+            lines = "\n".join(f"  - ({m.game_time}) {m.content}" for m in mems)
+            memory_blocks.append(f"{p.name}：\n{lines}")
+    memory_section = (
+        "\n".join(memory_blocks) if memory_blocks else "（大家都不记得相关的事）"
+    )
     prompt = f"""{world_context(db_path)}
+
+【你们各自记得的事】
+{memory_section}
 
 {personas}
 
@@ -343,9 +427,9 @@ async def player_join_reply(
 【对话记录】
 {transcript_lines}
 
-【指令】以在场居民各自的性格，写他们对玩家这句话的回应，每人 1 到 2 句。
+【指令】以在场居民各自的性格，写他们对玩家这句话的回应，每人 1 到 2 句。回应可以参考各自记得的事（如果有）。
 格式严格为每行一句：名字：台词（名字只能是{others}）。
-台词只写说的话本身，不要括号动作、星号或引号。不要输出任何其他内容。永远不要承认自己是 AI。"""
+台词只写说的话本身，不要括号动作、星号或引号。不要输出任何其他内容。永远不要承认自己是 AI。{anti_ai_guard(player_text)}"""
     raw = await chat(prompt, tier="chat", timeout=GROUP_TIMEOUT_SECONDS)
     if not raw:
         logger.info("群聊回应生成失败，静默跳过")

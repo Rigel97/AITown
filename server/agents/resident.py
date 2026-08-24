@@ -8,12 +8,32 @@
 """
 
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+logger = logging.getLogger(__name__)
+
 DB_PATH = Path(__file__).resolve().parents[1] / "db" / "aitown.db"
+
+
+def _parse_location(loc: str | None) -> tuple[int, int]:
+    """current_location 容错解析："x,y" 像素坐标串。
+
+    脏数据（手改 DB/旧格式残留）不能炸后端启动——回退玩家出生点而不是
+    (0,0)：地图左上角常落在墙里，居民会因寻路失败原地罚站
+    （2026-08-21 深检加固）。
+    """
+    try:
+        x_str, y_str = (loc or "").split(",")
+        return int(x_str), int(y_str)
+    except ValueError:
+        logger.warning("居民坐标脏数据 %r，回退出生点", loc)
+        from world.mapdata import SPAWN_COL, SPAWN_ROW, to_pixel_center
+
+        return to_pixel_center(SPAWN_COL), to_pixel_center(SPAWN_ROW)
 
 
 @dataclass
@@ -25,10 +45,8 @@ class Resident:
     x: int
     y: int
     daily_plan: str | None = None  # JSON 字符串（当日计划），由 planner 写入
-
-    def public(self) -> dict[str, object]:
-        """广播给前端的精简视图——人设细节（prompt_prefix）不下发。"""
-        return {"id": self.id, "name": self.name, "x": self.x, "y": self.y}
+    # 广播给前端的精简视图在 engine.ResidentRuntime.public()——人设细节
+    # （prompt_prefix）不下发
 
 
 class _PlanEntryLike(Protocol):
@@ -67,15 +85,15 @@ def load_residents(db_path: Path = DB_PATH) -> list[Resident]:
         ).fetchall()
     residents: list[Resident] = []
     for rid, name, occupation, prefix, loc, plan in rows:
-        x_str, y_str = (loc or "0,0").split(",")
+        x, y = _parse_location(loc)
         residents.append(
             Resident(
                 id=rid,
                 name=name,
                 occupation=occupation,
                 prompt_prefix=prefix,
-                x=int(x_str),
-                y=int(y_str),
+                x=x,
+                y=y,
                 daily_plan=plan,
             )
         )

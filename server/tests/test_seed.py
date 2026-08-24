@@ -9,6 +9,7 @@ from pathlib import Path
 
 from agents.resident import load_residents
 from db.seed import seed
+from world.mapdata import SPAWN_COL, SPAWN_ROW, to_pixel_center
 
 SCHEMA = Path(__file__).resolve().parents[1] / "db" / "schema.sql"
 
@@ -55,3 +56,21 @@ def test_prompt_prefix_contains_relations(tmp_path: Path) -> None:
     for r in residents:
         others = names - {r.name}
         assert any(n in r.prompt_prefix for n in others), f"{r.id} 的 prefix 缺少关系网"
+
+
+def test_load_residents_survives_dirty_location(tmp_path: Path) -> None:
+    """Bug Q：current_location 脏数据不炸后端启动，回退出生点
+    （(0,0) 常落在墙里，居民会因寻路失败原地罚站）。"""
+    db = _fresh_db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO residents "
+            "(id, name, occupation, personality, backstory, prompt_prefix, current_location) "
+            "VALUES ('bad_loc', '测试', '测试', 'x', 'x', '前缀', '不是坐标')"
+        )
+    residents = load_residents(db)  # 不抛
+    bad = next(r for r in residents if r.id == "bad_loc")
+    assert (bad.x, bad.y) == (
+        to_pixel_center(SPAWN_COL),
+        to_pixel_center(SPAWN_ROW),
+    )

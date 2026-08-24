@@ -59,10 +59,10 @@ Do NOT modify these without explicit human approval:
 - **Workflow Discipline:** Pre-commit hooks must pass before commits (or ask before bypassing). If verification fails, fix it before continuing.
 
 ## Current State 📍
-**Last Updated:** 2026-08-14
-**Working On:** Phase 2（W2 居民过日子）——玩家对话（player_chat + 气泡 UI）
-**Recently Completed:** Phase 1 全部；7 个居民人设定档入库；记忆流 store/retrieve；planner 静止版实测通过；计划执行循环上线——居民已按日程在镇上自主移动（A* 寻路不穿墙，实测午饭点 3 人聚到餐馆）
-**Blocked By:** None
+**Last Updated:** 2026-08-22
+**Working On:** Phase 4（Security pass → 朋友演示 → 7 天北极星验证）；Phase 3 全部完成 ✅
+**Recently Completed:** Phase 2 全部；2026-08-21 深检修复 14 项；2026-08-22 五轮优化 22 项 + 成本校准实测 ¥0.76/游戏日（目标 ¥2.1 达标）+ 模型选型定案（chat 层回退 M2.7，三层：杂活/对话 M2.7 + 反思 M3），后端 130 测 + 前端 10 测 + lint 零违规，浏览器实测全闭环
+**Blocked By:** 无（模型选型已定案，无待拍板项）
 
 ## Roadmap 🗺️
 
@@ -84,10 +84,10 @@ Do NOT modify these without explicit human approval:
 
 ### Phase 3: Polish（W4 成为游戏）
 - [ ] 每日简化反思（flagship 层 M3，1–2 条高层认知写回记忆流）
-- [ ] 存档/读档（关掉重开世界连续）
-- [ ] 出戏防护与降级打磨（"永不承认自己是 AI"；超时降级为符合人设的托词）
-- [ ] 错误处理补全（LLM 失败/超时降级路径）
-- [ ] 成本实测校准（目标单次游戏日 ≤ $0.30 ≈ ¥2.1）
+- [x] 存档/读档（关掉重开世界连续）（2026-08-22：autosave 60s + 停服存 + 启动读档 + WS save 协议；重启零 LLM 重烧，实测 kill→重启时钟/位置/计划全连续）
+- [ ] 出戏防护与降级打磨（"永不承认自己是 AI"；超时降级为符合人设的托词）（2026-08-22：出戏防线 anti_ai_guard + 托词池年龄中性重写 + 反思重试已落地，实测"你是 AI 吗"→苏晚"什么AI？我就一整理书的。"；剩持续观察新人设极端试探）
+- [x] 错误处理补全（LLM 失败/超时降级路径）（2026-08-22：五条 LLM 路径全部有重试/降级/熔断；WS 单消息异常隔离——一条坏消息只丢该条不再断连；重连清悬挂占位符）
+- [x] 成本实测校准（目标单次游戏日 ≤ $0.30 ≈ ¥2.1）（2026-08-22：11.5 游戏小时空转实测外推 **¥0.76/游戏日**，达标 36%；缓存命中 26%（非假设的 70%）但事件驱动把调用量压到 ~110 calls/日才是达标主因；数据与发现详见 MEMORY.md 成本校准决策记录）
 
 ### Phase 4: Launch（本地"上线"）
 - [ ] Security pass (see `REVIEW-CHECKLIST.md`)

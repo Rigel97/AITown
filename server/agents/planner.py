@@ -13,10 +13,17 @@
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from agents.resident import DB_PATH, Resident, load_residents, save_daily_plan
+from agents.resident import (
+    DB_PATH,
+    Resident,
+    load_residents,
+    save_daily_plan,
+    world_context,
+)
 from llm.client import chat
 from memory.retrieve import retrieve
 from memory.store import add_memory
@@ -26,6 +33,23 @@ logger = logging.getLogger(__name__)
 
 # 计划允许使用的地点（与地图/mapData、记忆词表保持一致）
 LOCATIONS = ["面包店", "杂货店", "花店", "图书馆", "餐馆", "北宅", "东南宅", "广场"]
+
+# 合法计划时间 "HH:MM"。LLM 偶尔输出 "07:00:00"（带秒）"7点""早上"——
+# 这类畸形时间曾在 current_plan_entry 的时间解包里抛 ValueError，而主循环
+# 没有异常隔离，一个脏条目就能让整个世界引擎静默停摆（2026-08-21 深检实证）。
+# 必须在入库前拦下。
+_TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
+
+
+def _normalize_time(raw: str) -> str | None:
+    """校验并规范化时间字段为 "HH:MM"；非法返回 None（该条目被丢弃）。"""
+    m = _TIME_RE.match(raw.strip())
+    if not m:
+        return None
+    hh, mm = int(m.group(1)), int(m.group(2))
+    if hh > 23 or mm > 59:
+        return None
+    return f"{hh:02d}:{mm:02d}"
 
 
 @dataclass
@@ -40,14 +64,24 @@ def _default_plan() -> list[PlanEntry]:
     return [PlanEntry("08:00", "广场", "随便逛逛，看看今天镇上有什么新鲜事")]
 
 
-def build_plan_prompt(resident: Resident, memories: list, day: int) -> str:
-    """组装计划 prompt：固定人设前缀在前（吃缓存），动态内容在后。"""
+def build_plan_prompt(
+    resident: Resident, memories: list, day: int, db_path: Path = DB_PATH
+) -> str:
+    """组装计划 prompt：固定人设前缀在前（吃缓存），动态内容在后。
+
+    world_context 与对话路径同位（前缀之后）：①统一缓存前缀结构——计划
+    调用与同居民的全部对话调用共享 prefix+world_context 最长公共前缀；
+    ②防计划幻觉——计划里只提名单上的居民与合法地名，老宋"编人修椅子"
+    同款问题的计划层防线（五轮 H3 / B3 前缀统一）。
+    """
     if memories:
         mem_lines = "\n".join(f"- ({m.game_time}) {m.content}" for m in memories)
     else:
         mem_lines = "（暂无——今天是你在小镇的第一天）"
     locations = "、".join(LOCATIONS)
     return f"""{resident.prompt_prefix}
+
+{world_context(db_path)}
 
 【你最近的记忆】
 {mem_lines}
@@ -61,25 +95,33 @@ def build_plan_prompt(resident: Resident, memories: list, day: int) -> str:
 你是小镇居民，永远不要承认自己是 AI。"""
 
 
-def parse_plan(raw: str) -> list[PlanEntry]:
-    """解析 LLM 输出为日程。任何异常都降级为默认日程。"""
+def _parse_plan_entries(raw: str) -> list[PlanEntry] | None:
+    """解析 LLM 输出为合法条目；解析失败/无合法条目返回 None（由调用方决定降级）。
+
+    时间经 _normalize_time 校验、地点经白名单过滤——脏数据在这里拦下，
+    绝不流入引擎（畸形时间会炸主循环，见 _TIME_RE 注释）。
+    """
     try:
         start = raw.index("[")
         end = raw.rindex("]") + 1
         data = json.loads(raw[start:end])
-        entries = [
-            PlanEntry(
-                time=str(item["time"]),
-                location=str(item["location"]),
-                action=str(item["action"]),
-            )
-            for item in data
-        ]
-        valid = [e for e in entries if e.location in LOCATIONS and e.time and e.action]
-        return valid if valid else _default_plan()
+        entries: list[PlanEntry] = []
+        for item in data:
+            time = _normalize_time(str(item["time"]))
+            location = str(item["location"])
+            action = str(item["action"])
+            if time and location in LOCATIONS and action:
+                entries.append(PlanEntry(time, location, action))
+        return entries or None
     except (ValueError, KeyError, TypeError):
-        logger.warning("计划解析失败，降级为默认日程。原始输出: %s", raw[:200])
-        return _default_plan()
+        logger.warning("计划解析失败。原始输出: %s", raw[:200])
+        return None
+
+
+def parse_plan(raw: str) -> list[PlanEntry]:
+    """解析 LLM 输出为日程。任何异常/非法条目都降级为默认日程。"""
+    entries = _parse_plan_entries(raw)
+    return entries if entries is not None else _default_plan()
 
 
 def plan_from_json(text: str | None) -> list[PlanEntry]:
@@ -96,8 +138,11 @@ def current_plan_entry(plan: list[PlanEntry], minutes_of_day: int) -> PlanEntry 
         return None
 
     def to_minutes(t: str) -> int:
-        hh, mm = t.split(":")
-        return int(hh) * 60 + int(mm)
+        # 解析层已保证 "HH:MM"；这里是双保险——畸形时间永远不该炸主循环
+        parts = t.split(":")
+        if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+            return 0
+        return int(parts[0]) * 60 + int(parts[1])
 
     ordered = sorted(plan, key=lambda e: to_minutes(e.time))
     entry = ordered[0]
@@ -123,22 +168,31 @@ async def generate_daily_plan(
     )
     # 计划是后台任务，无 <5s 硬要求；M2.7 的 think 块 + JSON 输出延迟波动大
     # （2026-08-17 实测 3~60s+ 都有，并发时更明显），给足 60s 并允许重试一次
-    prompt = build_plan_prompt(resident, memories, day)
+    prompt = build_plan_prompt(resident, memories, day, db_path)
     raw = await chat(prompt, tier="light", timeout=60)
     if not raw:
         logger.info("计划生成超时，重试一次（%s）", resident.id)
         raw = await chat(prompt, tier="light", timeout=60)
-    if not raw:
-        # LLM 超时/失败：静默降级，不打扰游戏
-        plan = _default_plan()
+
+    # 降级判定与记忆写入必须绑定：降级日程写入记忆流会被下轮检索命中，
+    # 居民会天天"广场随便逛逛"自我强化（known issue #47 教训，对话托词同款修复）。
+    # 持久化照常：运行态与 DB 保持一致。
+    entries = _parse_plan_entries(raw) if raw else None
+    if entries is None:
+        plan = _default_plan()  # LLM 超时/解析失败：静默降级，不打扰游戏
     else:
-        plan = parse_plan(raw)
+        plan = entries
+        summary = "；".join(f"{e.time} {e.location}{e.action}" for e in plan[:3])
+        add_memory(
+            resident.id,
+            game_time,
+            "event",
+            f"制定了今天的计划：{summary}……",
+            3,
+            db_path,
+        )
 
     save_daily_plan(resident.id, plan, db_path)
-    summary = "；".join(f"{e.time} {e.location}{e.action}" for e in plan[:3])
-    add_memory(
-        resident.id, game_time, "event", f"制定了今天的计划：{summary}……", 3, db_path
-    )
     return plan
 
 

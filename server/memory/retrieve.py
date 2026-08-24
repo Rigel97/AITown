@@ -15,7 +15,13 @@
 import math
 from pathlib import Path
 
-from memory.store import DB_PATH, Memory, extract_keywords, get_recent_memories
+from memory.store import (
+    DB_PATH,
+    Memory,
+    extract_keywords,
+    get_important_memories,
+    get_recent_memories,
+)
 from world.clock import parse_game_time
 
 # 三要素权重（W3 联调时按"对话里该记起的没记起"案例调）
@@ -47,10 +53,21 @@ def retrieve(
     db_path: Path = DB_PATH,
     candidate_limit: int = 100,
 ) -> list[Memory]:
-    """以 query 为线索，从该居民记忆流中取 Top-K 相关记忆。"""
+    """以 query 为线索，从该居民记忆流中取 Top-K 相关记忆。
+
+    候选集是双通道：最近 candidate_limit 条（近因通道）∪
+    importance ≥ IMPORTANT_MEMORY_THRESHOLD 的全部老记忆（重要通道）。
+    只用近因通道时，玩家连续聊几天后早期互动会永久沉底——
+    "居民记得玩家做过的事"是核心体验，重要记忆必须穿透窗口（2026-08-21
+    深检：实测每人 ~950 条记忆，100 条窗口只覆盖最近 2-3 个游戏日）。
+    """
     candidates = get_recent_memories(
         resident_id, limit=candidate_limit, db_path=db_path
     )
+    seen_ids = {m.id for m in candidates}
+    for m in get_important_memories(resident_id, db_path=db_path):
+        if m.id not in seen_ids:  # 近因窗口里已有的不重复加入
+            candidates.append(m)
     query_keywords = extract_keywords(query)
     ranked = sorted(
         candidates,
