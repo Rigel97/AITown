@@ -13,16 +13,24 @@
         <button id="event-log-toggle" type="button">📜 小镇播报</button>
         <div id="event-log" class="hidden"></div>
         <div id="hint" class="hidden"></div>
-        <div id="chat-panel" class="hidden">
-          <div id="chat-title"></div>
-          <div id="chat-history"></div>
-          <input
-            id="chat-input"
-            type="text"
-            maxlength="200"
-            placeholder="说点什么…（Enter 发送，Esc 关闭）"
-            autocomplete="off"
-          />
+        <!-- 探出式一体化对话卡：立绘骑在卡片左上、头部探出卡片顶缘 -->
+        <div id="chat-layer" class="hidden">
+          <div id="chat-history" class="hidden"></div>
+          <div id="chat-card">
+            <img id="portrait" alt="" aria-hidden="true" />
+            <div id="chat-name"></div>
+            <div id="chat-text"></div>
+            <div id="chat-input-row">
+              <input
+                id="chat-input"
+                type="text"
+                maxlength="200"
+                placeholder="说点什么…（Enter 发送，Esc 关闭）"
+                autocomplete="off"
+              />
+              <button id="chat-history-btn" type="button" title="对话记录（H）">📜</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

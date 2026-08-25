@@ -1,11 +1,25 @@
-// HUD：对话面板 + 事件日志 + 提示条（DOM 层）
-// 设计说明：文字 UI 用 DOM 而不是 Phaser 画布——文字清晰、输入框免造轮子、
-// 中文字体随便用；Phaser 只负责像素世界。HUD 不直接碰网络，通过回调与场景解耦。
-// 对话历史按居民 id 隔离：和谁说话就看到和谁的记录（2026-08-17 用户反馈修复）。
+// HUD：探出式一体化对话卡（立绘+名牌+台词+输入）+ 事件日志 + 提示条（DOM 层）
+//
+// 设计说明（为什么这样设计）：
+// - 文字 UI 用 DOM 而不是 Phaser 画布——文字清晰、输入框免造轮子、中文字体随便用；
+//   Phaser 只负责像素世界。HUD 不直接碰网络，通过回调与场景解耦。
+// - 对话卡是"谁说话就展示谁"的一体化单元：大立绘骑在卡片左侧、头部探出卡片顶，
+//   名牌用居民专属色、台词在立绘右侧——脸、名字、话绑定，群聊切换时 0.1 秒认人。
+// - 群聊多句回复是"一批到达"（一条 WS 消息含多行台词），卡片用展示队列逐句播放
+//   （每句停留 DWELL_MS），而不是一次性只留最后一句——涌现的群聊戏值得被看完。
+// - 玩家发言不切立绘（立绘语义 = "你面前这位/最近发言的居民"），避免你说→TA 答
+//   之间立绘来回闪切。
+// - 对话历史按居民 id 隔离（和谁说话就看到和谁的记录），平时收起（按 H 展开）——
+//   立绘时代画面空间宝贵，但"居民记得你"的配套记录功能不丢。
+// - "正在想…"在卡片台词区呼吸显示；回复丢失（error/断线）时恢复上一句，不留白卡。
+
+import { SPEAKER_COLORS, portraitUrl, speakerColor } from "./speakerStyle";
 
 export interface HudCallbacks {
   onSend: (text: string) => void;
   onClose: () => void;
+  /** 台词说话人名字 → 居民 id（群聊台词只有名字，id 要靠场景的居民表反查） */
+  resolveResident: (name: string) => string | null;
 }
 
 interface ChatLine {
@@ -14,29 +28,49 @@ interface ChatLine {
 }
 
 const MAX_EVENTS = 50;
+/** 群聊展示队列：每句停留时长（1–2 句台词的阅读时间） */
+const DWELL_MS = 1600;
+/** 立绘切换：先淡出旧图再换 src 的间隔 */
+const PORTRAIT_FADE_OUT_MS = 110;
+/** 关闭动画时长（与 CSS chat-layer-out 一致） */
+const CLOSE_ANIM_MS = 160;
 
 export class Hud {
-  private chatPanel = document.getElementById("chat-panel")!;
-  private chatTitle = document.getElementById("chat-title")!;
-  private chatHistory = document.getElementById("chat-history")!;
+  private chatLayer = document.getElementById("chat-layer")!;
+  private portraitImg = document.getElementById("portrait") as HTMLImageElement;
+  private chatName = document.getElementById("chat-name")!;
+  private chatText = document.getElementById("chat-text")!;
   private chatInput = document.getElementById("chat-input") as HTMLInputElement;
+  private historyBtn = document.getElementById("chat-history-btn") as HTMLButtonElement;
+  private historyPanel = document.getElementById("chat-history")!;
   private hint = document.getElementById("hint")!;
   private eventLog = document.getElementById("event-log")!;
   private eventToggle = document.getElementById("event-log-toggle") as HTMLButtonElement;
 
+  private readonly cb: HudCallbacks;
+
   /** 每个居民一份对话历史（key = resident id） */
   private histories = new Map<string, ChatLine[]>();
+  /** 当前对话的居民 id（历史归属、thinking 归属） */
   private currentId: string | null = null;
+  /** 当前立绘显示的居民 id（群聊中随最后发言者切换） */
+  private portraitResidentId: string | null = null;
+  /** 正在等待回复的居民 id（"正在想"状态） */
+  private thinkingId: string | null = null;
+  /** 最近一次卡片展示的台词（thinking 被清空且无新台词时恢复它，不留白卡） */
+  private lastView: ChatLine | null = null;
+  /** 群聊多句的展示队列（逐句播放，见文件头说明） */
+  private displayQueue: ChatLine[] = [];
+  private queueTimer: number | undefined;
+  private portraitTimer: number | undefined;
+  private closeTimer: number | undefined;
   /** 临时提示的生效截止（performance.now()）：期间 setHint(null) 不清 */
   private hintUntil = 0;
   /** 当前显示的 hint 文本（null=隐藏）：same-value 短路用 */
   private hintText: string | null = null;
-  /** “正在想…”占位符按居民隔离：B 的回复到达不能误删 A 的占位
-   * （旧版单元素设计：同时对两人说话时，先到的回复会把后一句的
-   * 占位删掉，玩家误以为消息丢了） */
-  private thinking = new Map<string, HTMLElement>();
 
   constructor(cb: HudCallbacks) {
+    this.cb = cb;
     this.chatInput.addEventListener("keydown", (e) => {
       // 阻止冒泡，避免打字触发游戏按键
       e.stopPropagation();
@@ -45,89 +79,131 @@ export class Hud {
         if (text && this.currentId) {
           this.addChatLine(this.currentId, "你", text);
           this.showThinking(this.currentId);
-          cb.onSend(text);
+          this.cb.onSend(text);
         }
         this.chatInput.value = "";
       } else if (e.key === "Escape") {
-        this.closeChat();
+        this.escape();
       }
     });
+    this.historyBtn.addEventListener("click", () => this.toggleHistory());
     this.eventToggle.addEventListener("click", () => {
       this.eventLog.classList.toggle("hidden");
     });
+    // 立绘加载失败（如新增居民忘放图）→ 隐藏占位破图；成功则恢复
+    this.portraitImg.addEventListener("error", () => this.portraitImg.classList.add("no-art"));
+    this.portraitImg.addEventListener("load", () => this.portraitImg.classList.remove("no-art"));
+    // 预载全部立绘：切换时才不闪白
+    this.preloadPortraits();
+  }
+
+  /** 预载全部居民立绘（本地资源，几百 KB×7，一次性；名单以配色表为准） */
+  private preloadPortraits(): void {
+    for (const id of Object.keys(SPEAKER_COLORS)) {
+      const img = new Image();
+      img.src = portraitUrl(id);
+    }
   }
 
   get isChatOpen(): boolean {
-    return !this.chatPanel.classList.contains("hidden");
+    return !this.chatLayer.classList.contains("hidden");
   }
 
-  /** 打开对话面板。title 由调用方组装完整文案（单聊/加入群聊语境在场景层才知道） */
-  openChat(residentId: string, title: string): void {
+  get isHistoryOpen(): boolean {
+    return !this.historyPanel.classList.contains("hidden");
+  }
+
+  /** 打开对话卡：立绘切到该居民，台词区显示最近一句（重开有连续感） */
+  openChat(residentId: string, residentName: string): void {
     this.currentId = residentId;
-    this.chatPanel.classList.remove("hidden");
-    this.chatTitle.textContent = title;
+    this.flushDisplayQueue();
+    this.setPortrait(residentId);
+    const lines = this.histories.get(residentId) ?? [];
+    const last = lines[lines.length - 1] ?? null;
+    this.setLineView(last ?? { who: residentName, text: "" });
     this.renderHistory();
+    this.chatLayer.classList.remove("hidden", "closing");
+    if (this.closeTimer !== undefined) {
+      window.clearTimeout(this.closeTimer);
+      this.closeTimer = undefined;
+    }
     this.chatInput.focus();
   }
 
-  closeChat(): void {
-    this.chatPanel.classList.add("hidden");
-    this.chatInput.blur();
+  /** Esc 分层：先关对话记录浮层，再关对话卡（输入框内 Esc 与全局 Esc 都走这里）。
+   *  H 键只在输入框未聚焦时生效（打字优先），开记录主路径是 📜 按钮 */
+  escape(): void {
+    if (this.isHistoryOpen) {
+      this.closeHistory();
+      return;
+    }
+    this.closeChat();
   }
 
-  /** 追加一条对话记录；若正好在和这位居民聊，立即渲染。
-   * 居民的回复到达（who !== "你"）会移除该居民的“正在想”占位符 */
+  closeChat(): void {
+    this.flushDisplayQueue();
+    this.thinkingId = null;
+    this.closeHistory();
+    if (this.closeTimer !== undefined) window.clearTimeout(this.closeTimer);
+    // 先播关闭动画，动画结束再 display:none
+    this.chatLayer.classList.add("closing");
+    this.closeTimer = window.setTimeout(() => {
+      this.chatLayer.classList.add("hidden");
+      this.chatLayer.classList.remove("closing");
+      this.closeTimer = undefined;
+    }, CLOSE_ANIM_MS);
+    this.chatInput.blur();
+    this.cb.onClose();
+  }
+
+  /** 追加一条对话记录；正在和这位居民聊则同时更新卡片（群聊走展示队列） */
   addChatLine(residentId: string, who: string, text: string): void {
     const lines = this.histories.get(residentId) ?? [];
     lines.push({ who, text });
     this.histories.set(residentId, lines);
     if (who !== "你") this.hideThinking(residentId);
     if (residentId === this.currentId && this.isChatOpen) {
-      this.appendLine(who, text);
-      this.chatHistory.scrollTop = this.chatHistory.scrollHeight;
+      this.enqueueView({ who, text });
+      if (this.isHistoryOpen) this.appendHistoryLine(who, text);
     }
   }
 
-  /** “对方正在想…”占位行（该居民的回复/error 到达时自动移除） */
+  /** “对方正在想…”：卡片台词区呼吸显示（立绘保持，名牌保持） */
   showThinking(residentId: string): void {
-    this.hideThinking(residentId); // 同目标重复发话：旧占位先清，不叠罗汉
-    const el = document.createElement("div");
-    el.className = "line thinking";
-    el.textContent = "（对方正在想…）";
-    this.chatHistory.appendChild(el);
-    this.chatHistory.scrollTop = this.chatHistory.scrollHeight;
-    this.thinking.set(residentId, el);
+    this.flushDisplayQueue();
+    this.thinkingId = residentId;
+    if (residentId === this.currentId && this.isChatOpen) {
+      this.chatText.textContent = "……";
+      this.chatText.classList.add("thinking");
+    }
   }
 
-  /** 移除占位符：指定居民只清本人；不传/传 null 清全部（重开面板时） */
+  /** 结束“正在想”：指定居民只清本人；不传/传 null 清全部（重连场景）。
+   *  回复没来（error/断线）时恢复上一句台词，不留白卡。 */
   hideThinking(residentId?: string | null): void {
-    if (residentId == null) {
-      for (const el of this.thinking.values()) el.remove();
-      this.thinking.clear();
-      return;
+    if (residentId != null && residentId !== this.thinkingId) return;
+    if (this.thinkingId === this.currentId && this.isChatOpen) {
+      this.chatText.classList.remove("thinking");
+      this.chatText.textContent = this.lastView?.text ?? "";
     }
-    this.thinking.get(residentId)?.remove();
-    this.thinking.delete(residentId);
+    this.thinkingId = null;
   }
 
-  private renderHistory(): void {
-    this.chatHistory.innerHTML = "";
-    this.hideThinking(); // 重建 DOM 后旧占位元素已死，清掉悬挂引用
-    if (!this.currentId) return;
-    for (const line of this.histories.get(this.currentId) ?? []) {
-      this.appendLine(line.who, line.text);
+  /** 切换对话记录浮层（H 键 / 按钮） */
+  toggleHistory(): void {
+    if (!this.isChatOpen) return;
+    if (this.isHistoryOpen) {
+      this.closeHistory();
+    } else {
+      this.renderHistory();
+      this.historyPanel.classList.remove("hidden");
+      this.chatLayer.classList.add("history-open");
     }
-    this.chatHistory.scrollTop = this.chatHistory.scrollHeight;
   }
 
-  private appendLine(who: string, text: string): void {
-    const line = document.createElement("div");
-    line.className = "line";
-    const whoEl = document.createElement("span");
-    whoEl.className = "who";
-    whoEl.textContent = `${who}：`;
-    line.append(whoEl, document.createTextNode(text));
-    this.chatHistory.appendChild(line);
+  private closeHistory(): void {
+    this.historyPanel.classList.add("hidden");
+    this.chatLayer.classList.remove("history-open");
   }
 
   addEvent(time: string, text: string): void {
@@ -167,5 +243,81 @@ export class Hud {
     this.hint.textContent = text;
     this.hint.classList.remove("hidden");
     this.hintUntil = performance.now() + ms;
+  }
+
+  // ---------- 卡片内部 ----------
+
+  /** 台词入队：玩家插话立即显示并清空队列；群聊逐句播放 */
+  private enqueueView(line: ChatLine): void {
+    if (line.who === "你") this.flushDisplayQueue();
+    this.displayQueue.push(line);
+    // 有待播节拍（正在展示某句）就排队等下一拍；没有才立即播。
+    // 注意不能用 queue.length===1 判断：上一句已被 shift 消费、正往在
+    // dwell 时队列就是空的，新句入队 length 又变 1，会立即插播顶掉它
+    if (this.queueTimer === undefined) this.playNextInQueue();
+  }
+
+  private playNextInQueue(): void {
+    const line = this.displayQueue.shift();
+    if (!line) {
+      this.queueTimer = undefined; // 队列枯竭：节拍链自然终止
+      return;
+    }
+    this.setLineView(line);
+    this.queueTimer = window.setTimeout(() => this.playNextInQueue(), DWELL_MS);
+  }
+
+  private flushDisplayQueue(): void {
+    if (this.queueTimer !== undefined) {
+      window.clearTimeout(this.queueTimer);
+      this.queueTimer = undefined;
+    }
+    this.displayQueue = [];
+  }
+
+  /** 更新卡片：名牌（专属色）+ 台词；立绘按说话人切换（玩家行保持当前立绘） */
+  private setLineView(line: ChatLine): void {
+    this.lastView = line.text ? line : null;
+    const residentId = this.cb.resolveResident(line.who);
+    if (residentId !== null) this.setPortrait(residentId);
+    this.chatName.textContent = line.who;
+    this.chatName.style.background = speakerColor(residentId);
+    this.chatText.classList.remove("thinking");
+    this.chatText.textContent = line.text;
+  }
+
+  /** 切换立绘：先淡出旧图（110ms）再换 src，避免加载闪白 */
+  private setPortrait(residentId: string): void {
+    if (this.portraitResidentId === residentId) return;
+    this.portraitResidentId = residentId;
+    if (this.portraitTimer !== undefined) window.clearTimeout(this.portraitTimer);
+    this.portraitImg.classList.add("fading");
+    this.portraitTimer = window.setTimeout(() => {
+      this.portraitImg.src = portraitUrl(residentId);
+      this.portraitImg.classList.remove("fading");
+      this.portraitTimer = undefined;
+    }, PORTRAIT_FADE_OUT_MS);
+  }
+
+  // ---------- 对话记录浮层 ----------
+
+  private renderHistory(): void {
+    this.historyPanel.innerHTML = "";
+    if (!this.currentId) return;
+    for (const line of this.histories.get(this.currentId) ?? []) {
+      this.appendHistoryLine(line.who, line.text);
+    }
+    this.historyPanel.scrollTop = this.historyPanel.scrollHeight;
+  }
+
+  private appendHistoryLine(who: string, text: string): void {
+    const line = document.createElement("div");
+    line.className = "line";
+    const whoEl = document.createElement("span");
+    whoEl.className = "who";
+    whoEl.textContent = `${who}：`;
+    line.append(whoEl, document.createTextNode(text));
+    this.historyPanel.appendChild(line);
+    this.historyPanel.scrollTop = this.historyPanel.scrollHeight;
   }
 }

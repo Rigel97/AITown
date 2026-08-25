@@ -1,18 +1,23 @@
-// 世界静态数据：角色精灵表布局与角色分配。
+// 世界静态数据：角色精灵表布局、地图 JSON v2 类型、道具足迹几何。
 //
-// 2026-08-18 起：地图数据不再由此文件代码生成，改由
-// scripts/convert_aitown_map.mjs 从 ai-town mage3 源数据产出 town_map.json
-// （前端渲染与服务端寻路共读）。本文件只留"角色 ↔ folk 精灵表"的映射。
-//
-// folk 精灵表（32x32folk.png，ai-town 素材，384×256 = 12 列 × 8 行 32px 帧）：
-// 8 个角色各占 3 列 × 4 行（96×128），块内 4 行依次为 down/left/right/up，
-// 每行 3 帧行走动画。角色 i 的块位置：col = i % 4，row = floor(i / 4)。
+// 2026-08-25 视觉换装（v2 素材，LimeZu Modern Exteriors 系）：
+// - 角色表 folk2.png（1792×256）：8 角色 × 4 方向行 × 7 帧（1 idle + 6 walk），
+//   帧 32×64（角色 1 格宽 × 2 格高）。行序 down/left/right/up。
+//   帧布局来源：Premade_Character 表（idle 行 y=64 / walk 行 y=128，
+//   方向列 right@0-5/up@6-11/left@12-17/down@18-23，经肤色像素三重验证），
+//   由 /tmp 工具链拼合，角色顺序 = CHARACTER_INDEX 值序。
+// - 地图 v2：建筑/树木是整 Sprite（props）而非瓦片拼墙——角色可以走到
+//   树冠/屋顶"后面"（depth=y 排序），阻挡走预计算足迹（与服务端同源）。
+// - 地图数据唯一源头：client/scripts/build_map.py → town_map.json，
+//   前端渲染与服务端寻路共读。
 
-export const FOLK_SHEET = "assets/sprites/32x32folk.png";
-export const FOLK_FRAME = 32; // 单帧边长
-const SHEET_COLS = 384 / FOLK_FRAME; // 12
+export const FOLK_SHEET = "assets/v2/folk2.png";
+export const FOLK_FRAME_W = 32;
+export const FOLK_FRAME_H = 64; // 角色 1 格宽 × 2 格高
+const FRAMES_PER_CHAR = 7; // 1 idle + 6 walk
+const SHEET_COLS = 1792 / FOLK_FRAME_W; // 56
 
-/** 居民 id → folk 角色序号（f1–f7）；玩家用 f8 */
+/** 居民 id → folk2 角色序号；玩家用 7 */
 export const CHARACTER_INDEX: Record<string, number> = {
   baker_lin: 0,
   librarian_su: 1,
@@ -27,18 +32,64 @@ export const PLAYER_CHARACTER = 7;
 export type Direction = "down" | "left" | "right" | "up";
 const DIR_ROW: Record<Direction, number> = { down: 0, left: 1, right: 2, up: 3 };
 
-/** 角色 charIndex 朝 dir 方向的行走帧序列（3 帧） */
+/** 角色 charIndex 朝 dir 的行走帧序列（6 帧循环，不含 idle） */
 export function walkFrames(charIndex: number, dir: Direction): number[] {
-  const blockCol = charIndex % 4;
-  const blockRow = Math.floor(charIndex / 4);
-  const base = (blockRow * 4 + DIR_ROW[dir]) * SHEET_COLS + blockCol * 3;
-  return [base, base + 1, base + 2];
+  const base = DIR_ROW[dir] * SHEET_COLS + charIndex * FRAMES_PER_CHAR;
+  return [base + 1, base + 2, base + 3, base + 4, base + 5, base + 6];
+}
+
+/** 角色 charIndex 朝 dir 的站立帧 */
+export function idleFrame(charIndex: number, dir: Direction): number {
+  return DIR_ROW[dir] * SHEET_COLS + charIndex * FRAMES_PER_CHAR;
+}
+
+// ── 地图 JSON v2 ─────────────────────────────────────────────────
+
+/** 地图道具：col/row = 锚点格（足迹中列 × 底行）；bw/bh = 阻挡足迹（0 = 贴花） */
+export interface MapProp {
+  img: string;
+  col: number;
+  row: number;
+  bw: number;
+  bh: number;
+}
+
+export interface TownMapData {
+  version: number;
+  cols: number;
+  rows: number;
+  tileDim: number;
+  tileset: string;
+  tilesetCols: number;
+  /** 行主序图层，-1 = 空（bg0 地面 / bg1 地面贴花） */
+  bgLayers: number[][][];
+  objLayers: number[][][];
+  props: MapProp[];
+  walkable: boolean[][];
+  playerSpawn: { col: number; row: number };
+}
+
+/** 道具阻挡足迹覆盖的格子范围（与 build_map.py 的推导同式：c0 = col - bw/2） */
+export function propFootprint(p: MapProp): {
+  c0: number;
+  r0: number;
+  c1: number;
+  r1: number;
+} | null {
+  if (p.bw <= 0 || p.bh <= 0) return null;
+  const c0 = p.col - Math.floor(p.bw / 2);
+  return { c0, r0: p.row - p.bh + 1, c1: c0 + p.bw - 1, r1: p.row };
+}
+
+/** 道具渲染/碰撞锚点像素（足迹中列、底行下缘） */
+export function propAnchorPx(p: MapProp, tileDim: number): { x: number; y: number } {
+  return { x: p.col * tileDim + tileDim / 2, y: (p.row + 1) * tileDim };
 }
 
 /**
  * 瓦片切比雪夫距离 ≤ range：与后端 world.mapdata.to_tile + engine.CHAT_RANGE_TILES
- * 同几何。对话距离判定前后端必须一致——旧版前端用像素欧氏距离，边界处
- * 会出现"有提示却 too_far"的错位（2026-08-21 深检发现）。
+ * 同几何。对话距离判定前后端必须一致——旧版前端用像素欧氏距离，边界处会
+ * 出现"有提示却 too_far"的错位（2026-08-21 深检发现）。
  */
 export function withinChebyshevTiles(
   x1: number,

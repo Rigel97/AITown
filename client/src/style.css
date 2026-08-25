@@ -80,33 +80,142 @@ body {
   font-size: 13px;
 }
 
-/* 对话面板（底部） */
-#chat-panel {
+/* ===== 探出式一体化对话卡 =====
+   结构：#chat-layer（底部锚定）> #chat-history（卡片上方浮层）+ #chat-card
+   > #portrait（骑在卡片左侧、底边对齐卡片底、头部探出卡片顶 ~140px）
+   > #chat-name（名牌，探出卡片顶缘）+ #chat-text + #chat-input-row。
+   立绘高 300px、卡片高 ~150px：脸、名字、话在同一视觉单元，
+   群聊切换说话人时整卡一起换。 */
+
+#chat-layer {
   position: absolute;
   left: 50%;
   bottom: 12px;
   transform: translateX(-50%);
-  width: 560px;
-  pointer-events: auto;
-  background: rgba(255, 248, 231, 0.97);
-  border: 2px solid #3d2b1f;
-  border-radius: 10px;
-  padding: 10px;
+  width: 740px;
+  pointer-events: none;
+  animation: chat-layer-in 200ms ease-out;
 }
 
-#chat-title {
+#chat-layer.closing {
+  animation: chat-layer-out 160ms ease-in forwards;
+}
+
+#chat-card {
+  position: relative;
+  pointer-events: auto;
+  box-sizing: border-box;
+  min-height: 150px;
+  padding: 14px 16px 12px 270px; /* 左侧 270px 让位给立绘 */
+  background: rgba(255, 248, 231, 0.95);
+  border: 2px solid #3d2b1f;
+  border-radius: 14px;
+}
+
+#portrait {
+  position: absolute;
+  left: 16px;
+  bottom: 0; /* 底边站在卡片底边上 */
+  height: 300px;
+  width: 236px;
+  object-fit: contain;
+  object-position: bottom;
+  filter: drop-shadow(0 4px 10px rgba(61, 43, 31, 0.35));
+  transition: opacity 200ms ease;
+  animation: portrait-in 240ms ease-out;
+}
+
+/* 说话人切换：先淡出旧立绘再换图（110ms），避免加载闪白 */
+#portrait.fading {
+  opacity: 0;
+  transition: opacity 110ms ease;
+}
+
+/* 立绘缺失时优雅降级（新增居民忘放图不至于破相） */
+#portrait.no-art {
+  opacity: 0;
+}
+
+/* 历史面板打开时立绘退为剪影，避免文字与立绘糊在一起 */
+#chat-layer.history-open #portrait {
+  opacity: 0.25;
+}
+
+#chat-name {
+  position: absolute;
+  top: -14px; /* 名牌探出卡片顶缘，像标签页 */
+  left: 270px;
+  padding: 3px 14px;
+  border: 2px solid #3d2b1f;
+  border-radius: 12px;
+  background: #6e6e6e; /* JS 按说话人专属色覆盖 */
+  color: #fff8e7;
   font-size: 14px;
   font-weight: bold;
-  color: #3d2b1f;
-  margin-bottom: 6px;
 }
 
-#chat-history {
-  max-height: 150px;
-  overflow-y: auto;
-  font-size: 14px;
+#chat-text {
+  min-height: 62px; /* 两行台词的空间，卡片高度平时稳定 */
+  font-size: 17px;
+  line-height: 1.7;
   color: #3d2b1f;
-  margin-bottom: 8px;
+  white-space: pre-wrap; /* 群聊多行按说话人分行 */
+}
+
+/* “正在想……”呼吸动画：治愈系动效要柔，不闪跳 */
+#chat-text.thinking {
+  animation: chat-breathe 1.2s ease-in-out infinite;
+}
+
+#chat-input-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+#chat-input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 8px;
+  font-size: 14px;
+  border: 2px solid #3d2b1f;
+  border-radius: 6px;
+  background: #fff;
+  outline: none;
+}
+
+#chat-history-btn {
+  flex: none;
+  width: 40px;
+  border: 2px solid #3d2b1f;
+  border-radius: 6px;
+  background: #fff8e7;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+#chat-history-btn:hover {
+  background: #f3e8cf;
+}
+
+/* 对话记录：卡片上方浮层，压过立绘（z-index），半透明暖底 */
+#chat-history {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  pointer-events: auto;
+  z-index: 2;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  background: rgba(255, 248, 231, 0.96);
+  border: 2px solid #3d2b1f;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #3d2b1f;
 }
 
 #chat-history .line {
@@ -118,18 +227,45 @@ body {
   margin-right: 6px;
 }
 
-#chat-history .thinking {
-  color: #8a6d3b;
-  font-style: italic;
+@keyframes chat-layer-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 
-#chat-input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px;
-  font-size: 14px;
-  border: 2px solid #3d2b1f;
-  border-radius: 6px;
-  background: #fff;
-  outline: none;
+@keyframes chat-layer-out {
+  from {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-50%) translateY(10px);
+  }
+}
+
+@keyframes portrait-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chat-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
 }

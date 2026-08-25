@@ -3,28 +3,28 @@
 寻路用真实的 town_map.json（与前端渲染同源），锁定"居民不穿墙"这条
 玩家可感知的正确性；计划条目选择是计划执行循环的核心分支逻辑。
 
-坐标基于 mage3 地图（50×50）的站位点（见 world/locations.py）：
-面包店门口 (17,29)、广场 (22,14)、花店 (4,19)、餐馆 (36,11)、
-图书馆 (22,7)、杂货店 (10,9)、东南宅 (44,43)。
+坐标基于 v2 地图（40×40）的站位点（见 world/locations.py）：
+面包店门口 (4,24)、广场 (18,25)、花店 (32,12)、餐馆 (32,26)、
+图书馆 (19,14)、杂货店 (5,12)、北宅 (13,32)。
 """
 
 from agents.planner import PlanEntry, current_plan_entry, plan_from_json
 from world.mapdata import is_walkable
 from world.pathfinding import find_path
 
-# 面包店门口 (17,29) → 广场 (22,14)：斜穿镇中心
-BAKERY = (17, 29)
-PLAZA = (22, 14)
-# 花店门口 (4,19) → 餐馆门口 (36,11)：横穿全图
-FLOWER_SHOP = (4, 19)
-RESTAURANT = (36, 11)
+# 面包店门口 (4,24) → 广场 (18,25)：穿过主街
+BAKERY = (4, 24)
+PLAZA = (18, 25)
+# 花店门口 (32,12) → 餐馆门前 (32,26)：纵穿东半镇
+FLOWER_SHOP = (32, 12)
+RESTAURANT = (32, 26)
 
 
 def test_path_short_hop() -> None:
     path = find_path(BAKERY, PLAZA)
     assert path, "面包店到广场应该有路"
     assert path[-1] == PLAZA
-    assert len(path) <= 25  # 曼哈顿距离 20，绕路也不该太离谱
+    assert len(path) <= 30  # 曼哈顿距离 ~23，绕路也不该太离谱
 
 
 def test_path_never_crosses_walls() -> None:
@@ -41,8 +41,8 @@ def test_path_never_crosses_walls() -> None:
 
 
 def test_all_location_spots_reachable() -> None:
-    """所有地点站位点必须互相可达——mage3 的房屋内部是封闭孤岛，
-    站位点若落在孤岛上，居民会被困死（2026-08-19 换图踩过的坑）。"""
+    """所有地点站位点必须互相可达——v2 地图无封闭孤岛，
+    但站位点若落在建筑足迹/水面上，居民会被困死（换图必踩的坑）。"""
     from world.locations import LOCATION_SPOTS
 
     anchors = [spots[0] for spots in LOCATION_SPOTS.values()]
@@ -56,10 +56,10 @@ def test_all_location_spots_reachable() -> None:
 
 def test_path_same_point_and_unreachable() -> None:
     assert find_path(PLAZA, PLAZA) == []
-    # 目标不可走（面包店屋内的 obj 障碍格）→ 空列表，不抛异常
-    assert find_path(PLAZA, (17, 20)) == []
-    # 目标可走但在封闭孤岛上（面包店屋内，被 obj 层围死）→ 同样空列表
-    assert find_path(PLAZA, (14, 24)) == []
+    # 目标不可走（面包店建筑足迹格）→ 空列表，不抛异常
+    assert find_path(PLAZA, (4, 22)) == []
+    # 目标越界 → 同样空列表，不抛异常
+    assert find_path(PLAZA, (99, 99)) == []
 
 
 def test_current_plan_entry_picks_latest_past() -> None:

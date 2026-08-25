@@ -1,10 +1,19 @@
-// 主小镇场景（Phaser v4）
+// 主小镇场景（Phaser v4）—— v2 视觉：LimeZu 系素材 + 整 Sprite 建筑 + 昼夜光照
 // 设计说明（为什么这样设计）：
-// - 地图从共享 town_map.json 读取（与服务端寻路同源）：ai-town 格式双层
-//   bgtiles（地面）+ 双层 objmap（物件/障碍），逐层渲染；碰撞只挂 obj 层
-//   （obj 层非空 = 阻挡，与 ai-town 的 blockedWithPositions 语义一致）。
-// - 角色用 folk 精灵表（每角色 96×128 块：down/left/right/up 各 3 帧行走），
-//   玩家与居民共用同一套帧计算（mapData.walkFrames）。
+// - 地图从共享 town_map.json 读取（与服务端寻路同源）：v2 格式 = 2 层地面
+//   tilemap（地面 + 草地变种贴花）+ props 整 Sprite（建筑/树木/道具）。
+//   建筑不再用瓦片拼墙：Sprite depth = 底边 y，角色可以走到树冠/屋顶
+//   "后面"被正确遮挡（旧的 obj 瓦片层做不到）。
+// - 阻挡：props 的 bw×bh 足迹 → 每件一个隐形 static body + collider；
+//   足迹与服务端 walkable 网格同源（build_map.py 一个来源推导），
+//   客户端物理体与服务端寻路永远不会打架。
+// - 资产两阶段加载：preload 只装 JSON；create 读出 tileset/props 清单后
+//   动态发起第二阶段加载（图片文件名在 JSON 里，写死会两处维护），
+//   完成后再 buildWorld——net 连接也等世界就绪，避免 world_state 先到
+//   而 residents 容器未建。
+// - 角色用 folk2 精灵表（每角色 7 帧 × 4 向，帧 32×64：角色 1 格宽 2 格高，
+//   更接近真人比例）。origin (0.5, 0.75)：精灵 y 仍是"逻辑格中心"（服务端
+//   坐标语义不变），脚底落在格底边；物理体只覆盖脚部 20×20。
 // - 相机 zoom 可切换（键 1/2/3）：近身逛街 ×2 与"上帝视角"×1 之间的观感
 //   差异很大，留给玩家自己选；为让文字清晰，文字一律"大字号渲染 + scale
 //   缩小"——小纹理被 zoom 放大会糊，大纹理缩放后才锐利。
@@ -13,11 +22,13 @@
 //   转向精确（2026-08-19 视觉优化，修掉逐秒 96px 跳变）。
 // - 头顶名牌 = 名字 + 动作 emoji（actionEmoji 关键词映射，斯坦福
 //   pronunciato 的低成本版），让"正在干嘛"扫一眼可见。
-// - 深度即 y：所有角色（玩家/居民/名牌）depth = y——脚下越靠下越靠前，
+// - 深度即 y：所有角色（玩家/居民/名牌/道具）depth = y——脚下越靠下越靠前，
 //   聚集点（餐馆、广场）居民互相遮挡才正确。
-// - 暖色滤镜（B 键开关）：mage3 石城调性偏暗，用相机级 ColorMatrix
-//   提亮 + 加饱和 + 微暖色偏移拉近"星露谷式治愈"明度带，不动素材。
-// - 文字 UI（对话/事件日志/输入）走 DOM HUD，画布只画像素世界（头顶名牌）。
+// - 脚下椭圆阴影：角色"贴地"的关键细节，跟随角色、depth 比本人低 1。
+// - 昼夜光照：按游戏时钟分 5 档调相机 ColorMatrix（清晨/白天/黄昏/入夜/
+//   深夜），只在档位变化时重设矩阵（不逐帧上传）。B 键可整体关闭对照。
+// - 文字 UI（对话卡/事件日志/输入）走 DOM HUD：对话是"立绘+名牌+台词"的
+//   一体化卡片（见 ui/hud.ts），画布只画像素世界（头顶名牌）。
 // - 对话打开时禁用移动，避免边打字边走路。
 
 import Phaser from "phaser";
@@ -26,27 +37,19 @@ import { Hud } from "../ui/hud";
 import { actionEmoji } from "../world/actionEmoji";
 import {
   CHARACTER_INDEX,
-  FOLK_FRAME,
+  FOLK_FRAME_H,
+  FOLK_FRAME_W,
   PLAYER_CHARACTER,
+  idleFrame,
+  propAnchorPx,
+  propFootprint,
   walkFrames,
   withinChebyshevTiles,
   type Direction,
+  type TownMapData,
 } from "../world/mapData";
 
-interface TownMapData {
-  cols: number;
-  rows: number;
-  tileDim: number;
-  tileset: string;
-  tilesetCols: number;
-  /** 行主序图层，-1 = 空 */
-  bgLayers: number[][][];
-  objLayers: number[][][];
-  walkable: boolean[][];
-  playerSpawn: { col: number; row: number };
-}
-
-/** 相机缩放档位（键 1/2/3 直达）。×1 一屏约 30×20 格，接近斯坦福"上帝视角" */
+/** 相机缩放档位（键 1/2/3 直达）。×1 一屏 30×20 格，接近斯坦福"上帝视角" */
 const CAMERA_ZOOMS = [2, 1.5, 1] as const;
 const ZOOM_KEYS = ["ONE", "TWO", "THREE"] as const;
 const DEFAULT_ZOOM_INDEX = 0;
@@ -62,17 +65,39 @@ const PLAYER_SPEED = 110; // 像素/秒
 // 到位后停顿（每格一顿的脉冲感），也永不清零剩余距离后的僵直。
 const SERVER_TICKS_PER_SECOND = 3;
 const RESIDENT_MAX_SPEED = 240; // 上限：重连/大偏移时也别让居民"冲刺"
-const RESIDENT_SNAP_DISTANCE = FOLK_FRAME * 4; // 超 4 格视为瞬移（重连），直接贴齐
 const RESIDENT_ARRIVE_EPSILON = 0.5; // 剩余距离小于此值视为已到达
 
-const LABEL_OFFSET_Y = 13;
-const HUD_DEPTH = 99999; // 状态栏永远在最上层（角色 depth = y 最大约 1600）
+// 名牌在头顶上方：帧高 64、origin 0.75 → 头顶在 y-48，名牌再抬高 4px
+const LABEL_OFFSET_Y = 52;
+// 阴影贴在脚底（格底边 = y+16），略上收 2px 视觉更贴
+const SHADOW_OFFSET_Y = 14;
+const HUD_DEPTH = 99999; // 状态栏永远在最上层（角色 depth = y 最大约 1300）
 
-/** 一个居民的客户端视觉状态：精灵 + 名牌 + 插值目标（数据收口，避免散落 getData） */
+// —— 昼夜光照档（brightness 是乘法：>1 提亮 <1 压暗；hue 单位度，负=暖）——
+// 只在档位切换时重设矩阵；参数手感来自 mage3 时代暖色滤镜的白昼校准值外推
+const LIGHT_SCHEDULE: ReadonlyArray<{
+  from: number; // 含
+  to: number; // 不含
+  brightness: number;
+  saturate: number;
+  hue: number;
+  icon: string;
+  name: string;
+}> = [
+  { from: 6, to: 8, brightness: 1.06, saturate: 1.18, hue: -10, icon: "🌅", name: "清晨" },
+  { from: 8, to: 17, brightness: 1.12, saturate: 1.2, hue: -12, icon: "☀️", name: "白天" },
+  { from: 17, to: 19, brightness: 1.04, saturate: 1.28, hue: -20, icon: "🌇", name: "黄昏" },
+  { from: 19, to: 21, brightness: 0.92, saturate: 1.05, hue: -10, icon: "🌆", name: "入夜" },
+  { from: 21, to: 24, brightness: 0.74, saturate: 0.85, hue: 22, icon: "🌙", name: "深夜" },
+  { from: 0, to: 6, brightness: 0.74, saturate: 0.85, hue: 22, icon: "🌙", name: "深夜" },
+];
+
+/** 一个居民的客户端视觉状态：精灵 + 阴影 + 名牌 + 插值目标（数据收口） */
 interface ResidentVisual {
   id: string;
   name: string;
   sprite: Phaser.GameObjects.Sprite;
+  shadow: Phaser.GameObjects.Image;
   label: Phaser.GameObjects.Text;
   /** 服务端最新目标点（世界坐标），update() 里逐帧逼近 */
   target: { x: number; y: number };
@@ -85,6 +110,7 @@ interface ResidentVisual {
 
 export class TownScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
+  private playerShadow!: Phaser.GameObjects.Image;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private net!: NetClient;
   private statusText!: Phaser.GameObjects.Text;
@@ -94,7 +120,7 @@ export class TownScene extends Phaser.Scene {
   private residents = new Map<string, ResidentVisual>();
   private chattingIds = new Set<string>();
   private chatTarget: string | null = null;
-  private tileDim = FOLK_FRAME;
+  private tileDim = 32;
   private worldWidth = 0;
   private worldHeight = 0;
   private zoomIndex = DEFAULT_ZOOM_INDEX;
@@ -103,35 +129,47 @@ export class TownScene extends Phaser.Scene {
   private gameTimeLabel = "";
   /** 首次 world_state 是否已把玩家贴齐到服务端位置（之后客户端权威，忽略） */
   private playerSynced = false;
+  /** v2 两阶段加载：props/tileset 就绪前 update/网络消息全部让路 */
+  private worldReady = false;
+  private lightBucket = -1;
 
   constructor() {
     super("TownScene");
   }
 
   preload(): void {
-    this.load.image("town-tiles", "assets/tiles/magecity.png");
-    this.load.spritesheet("folk", "assets/sprites/32x32folk.png", {
-      frameWidth: FOLK_FRAME,
-      frameHeight: FOLK_FRAME,
-    });
+    // 只装地图 JSON：tileset/props 文件名要从 JSON 里读，第二阶段再装
     this.load.json("town-map", "assets/town_map.json");
   }
 
   create(): void {
-    // —— 瓦片地图（从共享 JSON 读，与服务端寻路同源）——
-    // ai-town 格式是 4 张图层（2 bg + 2 obj）。Phaser 的 make.tilemap({data})
-    // 一次只建一层，所以每层建一个 tilemap 对象、各贴一张 layer——
-    // 渲染顺序 = 创建顺序（bg0 → bg1 → obj0 → obj1），obj 层自然盖在地面之上。
-    // 图层 depth 恒为 0，角色 depth = y（≥16），角色永远在图层之上——与旧版
-    // "创建顺序在上"的视觉语义一致。
     const townMap = this.cache.json.get("town-map") as TownMapData;
+    if (townMap.version !== 2) {
+      throw new Error(`town_map.json 版本不符（${townMap.version}），请重跑 client/scripts/build_map.py`);
+    }
+    // —— 第二阶段加载：地图声明的全部图片 ——
+    this.load.image("town-tiles", townMap.tileset);
+    this.load.spritesheet("folk", "assets/v2/folk2.png", {
+      frameWidth: FOLK_FRAME_W,
+      frameHeight: FOLK_FRAME_H,
+    });
+    this.load.image("shadow", "assets/v2/shadow.png");
+    const propImgs = new Set(townMap.props.map((p) => p.img));
+    for (const img of propImgs) {
+      this.load.image(`prop-${img}`, `assets/v2/props/${img}.png`);
+    }
+    this.load.once(Phaser.Loader.Events.COMPLETE, () => this.buildWorld(townMap));
+    this.load.start();
+  }
+
+  /** 世界装配：v2 地面 tilemap + props 道具层 + 角色 + 相机/HUD/网络 */
+  private buildWorld(townMap: TownMapData): void {
     this.tileDim = townMap.tileDim;
     this.worldWidth = townMap.cols * this.tileDim;
     this.worldHeight = townMap.rows * this.tileDim;
 
-    const objLayers: Phaser.Tilemaps.TilemapLayer[] = [];
-    for (const layerData of [...townMap.bgLayers, ...townMap.objLayers]) {
-      const isObj = !townMap.bgLayers.includes(layerData);
+    // —— 地面 tilemap（bg0 地面 / bg1 草地变种贴花；不挂碰撞）——
+    for (const layerData of townMap.bgLayers) {
       const map = this.make.tilemap({
         data: layerData,
         tileWidth: this.tileDim,
@@ -141,24 +179,57 @@ export class TownScene extends Phaser.Scene {
       if (!tiles) throw new Error("tileset 加载失败");
       const layer = map.createLayer(0, tiles, 0, 0);
       if (!layer) throw new Error("layer 创建失败");
-      if (isObj && layer instanceof Phaser.Tilemaps.TilemapLayer) {
-        // 碰撞：obj 层非空即阻挡（-1 = 空），与 ai-town 的
-        // blockedWithPositions 语义一致；bg 层不参与碰撞
-        layer.setCollisionByExclusion([-1]);
-        objLayers.push(layer);
+    }
+
+    // —— props 道具层：建筑/树木整 Sprite，depth=底边；足迹 → 隐形碰撞体 ——
+    const obstacles: Phaser.GameObjects.Rectangle[] = [];
+    for (const p of townMap.props) {
+      const anchor = propAnchorPx(p, this.tileDim);
+      const depth = (p.row + 1) * this.tileDim;
+      const img = this.add.image(anchor.x, anchor.y, `prop-${p.img}`).setOrigin(0.5, 1);
+      const foot = propFootprint(p);
+      if (foot) {
+        img.setDepth(depth);
+        const cx = ((foot.c0 + foot.c1 + 1) / 2) * this.tileDim;
+        const cy = ((foot.r0 + foot.r1 + 1) / 2) * this.tileDim;
+        const rect = this.add
+          .rectangle(
+            cx,
+            cy,
+            (foot.c1 - foot.c0 + 1) * this.tileDim,
+            (foot.r1 - foot.r0 + 1) * this.tileDim,
+          )
+          .setVisible(false);
+        this.physics.add.existing(rect, true); // static body
+        obstacles.push(rect);
+      } else {
+        // 贴花（花坛/碎石）：贴地面，任何角色/道具都能盖住它
+        img.setDepth(p.row * this.tileDim + 1);
       }
     }
 
     // —— 玩家 ——
     const pc = townMap.playerSpawn.col * this.tileDim + this.tileDim / 2;
     const pr = townMap.playerSpawn.row * this.tileDim + this.tileDim / 2;
-    this.player = this.physics.add.sprite(pc, pr, "folk", walkFrames(PLAYER_CHARACTER, "down")[0]);
-    // charIndex 必须设置：playAnim 靠它算帧号，缺了会生成 NaN 帧、走路无动画
+    this.player = this.physics.add.sprite(pc, pr, "folk", idleFrame(PLAYER_CHARACTER, "down"));
+    // origin (0.5, 0.75)：y 语义 = 逻辑格中心（服务端坐标），脚底落格底边
+    this.player.setOrigin(0.5, 0.75);
+    // 物理体只覆盖脚部 20×20（帧 32×64 的右下区域）：头顶不参与撞墙
+    const body = this.player.body;
+    if (body) {
+      body.setSize(20, 20);
+      body.setOffset((FOLK_FRAME_W - 20) / 2, FOLK_FRAME_H - 20 - 4);
+    }
     this.player.setData("charIndex", PLAYER_CHARACTER);
     this.player.setData("dir", "down");
     this.player.setCollideWorldBounds(true);
     this.physics.world.setBounds(0, 0, this.worldWidth, this.worldHeight);
-    for (const l of objLayers) this.physics.add.collider(this.player, l);
+    for (const o of obstacles) this.physics.add.collider(this.player, o);
+
+    // 脚下阴影（比本人低 1 层，跟随移动）
+    this.playerShadow = this.add
+      .image(pc, pr + SHADOW_OFFSET_Y, "shadow")
+      .setDepth(pr - 1);
 
     // —— 相机 ——
     this.cameras.main.setBounds(0, 0, this.worldWidth, this.worldHeight);
@@ -167,11 +238,19 @@ export class TownScene extends Phaser.Scene {
 
     this.cursors = this.input.keyboard!.createCursorKeys();
 
-    // —— HUD（DOM）——
+    // —— HUD（DOM：探出式对话卡 + 事件日志）——
     this.hud = new Hud({
       onSend: (text) => this.sendChat(text),
       onClose: () => {
         this.chatTarget = null;
+      },
+      // 群聊台词只带说话人名字：用居民表反查 id（立绘/专属色都靠 id）。
+      // 居民表随 world_state 异步到达，闭包里实时查而不是启动时快照
+      resolveResident: (name) => {
+        for (const rv of this.residents.values()) {
+          if (rv.name === name) return rv.id;
+        }
+        return null;
       },
     });
 
@@ -184,19 +263,14 @@ export class TownScene extends Phaser.Scene {
       })
       .setDepth(HUD_DEPTH);
 
-    // —— 暖色滤镜（mage3 石城 → 治愈系明度带的轻量拉拢，不动素材）——
-    // B 键开关，方便 A/B 对比决定 W4 是否换绿色系底图。Canvas 回退时静默跳过。
+    // —— 昼夜光照（相机级 ColorMatrix；Canvas 回退时静默跳过）——
     if (this.game.renderer.type === Phaser.WEBGL) {
-      const fx = this.cameras.main.filters.internal.addColorMatrix();
-      // 注意：brightness 是乘法（0=黑，1=原图）——提亮要传 >1 的值
-      fx.colorMatrix.brightness(1.12); // 提亮 12%（重置矩阵后应用）
-      fx.colorMatrix.saturate(1.2, true); // 加饱和（乘法叠加）
-      fx.colorMatrix.hue(-12, true); // 色相向暖微偏
-      this.warmFilter = fx;
+      this.warmFilter = this.cameras.main.filters.internal.addColorMatrix();
+      this.applyLight(8); // 默认白天档，首个 world_state 到达后按真实时间切档
     } else {
-      console.warn("当前渲染器不支持 Filters，暖色滤镜已跳过");
+      console.warn("当前渲染器不支持 Filters，昼夜光照已跳过");
     }
-    this.input.keyboard!.on("keydown-B", () => this.toggleWarm());
+    this.input.keyboard!.on("keydown-B", () => this.toggleLight());
 
     // —— 视角切换：键 1/2/3 ——
     for (let i = 0; i < ZOOM_KEYS.length; i++) {
@@ -204,10 +278,13 @@ export class TownScene extends Phaser.Scene {
       this.input.keyboard!.on(`keydown-${key}`, () => this.setZoom(i));
     }
 
-    // Enter 打开对话；Esc 关闭（输入框内部也各自处理 Esc）
+    // Enter 打开对话；Esc 分层关闭（先记录浮层后对话卡）；H 开关对话记录
+    // （H 仅输入框未聚焦时生效，主路径是 📜 按钮——打字优先于快捷键）
     this.input.keyboard!.on("keydown-ENTER", () => this.tryOpenChat());
-    this.input.keyboard!.on("keydown-ESC", () => this.hud.closeChat());
+    this.input.keyboard!.on("keydown-ESC", () => this.hud.escape());
+    this.input.keyboard!.on("keydown-H", () => this.hud.toggleHistory());
 
+    // 世界就绪后才连网络：world_state 到达时容器已建好（消息不会丢进空场景）
     this.net = new NetClient(
       "ws://localhost:8000/ws",
       (msg) => this.onServerMessage(msg),
@@ -219,9 +296,11 @@ export class TownScene extends Phaser.Scene {
       },
     );
     this.net.connect();
+    this.worldReady = true;
   }
 
   update(time: number): void {
+    if (!this.worldReady) return;
     const dt = Math.min((time - this.lastFrameTime) / 1000, 0.1); // 上限防切页回来跳变
     this.lastFrameTime = time;
 
@@ -234,6 +313,8 @@ export class TownScene extends Phaser.Scene {
     // 居民插值永远推进——对话打开时世界照常活着
     this.stepResidents(dt);
     this.player.setDepth(this.player.y);
+    this.playerShadow.setPosition(this.player.x, this.player.y + SHADOW_OFFSET_Y);
+    this.playerShadow.setDepth(this.player.y - 1);
 
     // 对话打开时不动
     if (this.hud.isChatOpen) {
@@ -281,7 +362,7 @@ export class TownScene extends Phaser.Scene {
     }
   }
 
-  // ---------- 相机 / 滤镜 ----------
+  // ---------- 相机 / 光照 ----------
 
   private setZoom(index: number): void {
     this.zoomIndex = index;
@@ -289,22 +370,50 @@ export class TownScene extends Phaser.Scene {
     this.refreshStatusText();
   }
 
-  private toggleWarm(): void {
+  private toggleLight(): void {
     if (!this.warmFilter) return;
     this.warmFilter.active = !this.warmFilter.active;
     this.warmOn = this.warmFilter.active;
     this.refreshStatusText();
   }
 
+  /** 按小时应用光照档；档位没变就跳过（不逐秒上传矩阵） */
+  private applyLightByClock(label: string): void {
+    const m = /(\d{2}):(\d{2})$/.exec(label);
+    if (!m) return;
+    this.applyLight(Number(m[1]));
+  }
+
+  private applyLight(hour: number): void {
+    if (!this.warmFilter) return;
+    const slot =
+      LIGHT_SCHEDULE.find((s) => s.from <= hour && hour < s.to) ??
+      LIGHT_SCHEDULE[LIGHT_SCHEDULE.length - 1];
+    if (LIGHT_SCHEDULE.indexOf(slot) === this.lightBucket) return;
+    this.lightBucket = LIGHT_SCHEDULE.indexOf(slot);
+    const fx = this.warmFilter.colorMatrix;
+    // brightness 是乘法（0=黑，1=原图）——重置矩阵后应用；饱和/色相乘法叠加
+    fx.brightness(slot.brightness);
+    fx.saturate(slot.saturate, true);
+    fx.hue(slot.hue, true);
+    this.refreshStatusText();
+  }
+
+  private currentLightIcon(): string {
+    if (!this.warmFilter) return "";
+    if (!this.warmOn) return "";
+    const slot = this.lightBucket >= 0 ? LIGHT_SCHEDULE[this.lightBucket] : LIGHT_SCHEDULE[1];
+    return ` · ${slot.icon}`;
+  }
+
   private refreshStatusText(): void {
-    const warm = this.warmFilter ? (this.warmOn ? " · ☀️" : "") : "";
     const label = this.gameTimeLabel || "连接中…";
-    this.statusText.setText(`小镇时间: ${label} · 视角×${CAMERA_ZOOMS[this.zoomIndex]}${warm}`);
+    this.statusText.setText(`小镇时间: ${label} · 视角×${CAMERA_ZOOMS[this.zoomIndex]}${this.currentLightIcon()}`);
   }
 
   // ---------- 居民插值 ----------
 
-  /** 每帧把居民向服务端目标点逼近（详见文件头"按时到位"说明）+ y-sort + 名牌跟随 */
+  /** 每帧把居民向服务端目标点逼近（详见文件头"按时到位"说明）+ y-sort + 名牌/阴影跟随 */
   private stepResidents(dt: number): void {
     for (const rv of this.residents.values()) {
       const { sprite } = rv;
@@ -327,12 +436,14 @@ export class TownScene extends Phaser.Scene {
       }
       // 深度即 y：脚下越靠下越靠前（名牌比本人高 1 层，被前方角色盖住是正确的）
       sprite.setDepth(sprite.y);
+      rv.shadow.setPosition(sprite.x, sprite.y + SHADOW_OFFSET_Y);
+      rv.shadow.setDepth(sprite.y - 1);
       rv.label.setPosition(sprite.x, sprite.y - LABEL_OFFSET_Y);
       rv.label.setDepth(sprite.y + 1);
     }
   }
 
-  // ---------- 动画（folk 精灵表，帧号由 mapData.walkFrames 计算） ----------
+  // ---------- 动画（folk2 精灵表：帧号由 mapData.idleFrame/walkFrames 计算） ----------
 
   private dirFromInput(dx: number, dy: number): Direction {
     if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? "left" : "right";
@@ -347,16 +458,15 @@ export class TownScene extends Phaser.Scene {
     const charIndex = sprite.getData("charIndex") as number;
     const direction = dir ?? (sprite.getData("dir") as Direction | undefined) ?? "down";
     if (dir) sprite.setData("dir", direction);
-    const frames = walkFrames(charIndex, direction);
     if (mode === "idle") {
       sprite.anims.stop();
-      sprite.setFrame(frames[0]);
+      sprite.setFrame(idleFrame(charIndex, direction));
     } else {
       const key = `walk-${charIndex}-${direction}`;
       if (!this.anims.exists(key)) {
         this.anims.create({
           key,
-          frames: frames.map((f) => ({ key: "folk", frame: f })),
+          frames: walkFrames(charIndex, direction).map((f) => ({ key: "folk", frame: f })),
           frameRate: 8,
           repeat: -1,
         });
@@ -404,11 +514,7 @@ export class TownScene extends Phaser.Scene {
     if (!nearest) return;
     if (!this.inChatRange(nearest)) return;
     this.chatTarget = nearest.id;
-    const groupChat = this.chattingIds.has(nearest.id);
-    this.hud.openChat(
-      nearest.id,
-      groupChat ? `加入 ${nearest.name} 的对话` : `和 ${nearest.name} 聊天`,
-    );
+    this.hud.openChat(nearest.id, nearest.name);
   }
 
   private sendChat(text: string): void {
@@ -418,8 +524,10 @@ export class TownScene extends Phaser.Scene {
   }
 
   private onServerMessage(msg: ServerMessage): void {
+    if (!this.worldReady) return; // 资产加载期消息直接让路（连接在就绪后才开始，双保险）
     if (msg.type === "world_state") {
       this.gameTimeLabel = String(msg.payload.game_time);
+      this.applyLightByClock(this.gameTimeLabel);
       this.refreshStatusText();
       // 首次同步：把玩家贴齐到服务端记忆的位置（读档/刷新页面不瞬移回出生点）。
       // 只做一次——之后是客户端权威移动，每秒广播的服务端镜像不再反写本地
@@ -432,7 +540,7 @@ export class TownScene extends Phaser.Scene {
       for (const r of residents) this.syncResident(r);
     } else if (msg.type === "chat_reply") {
       const id = String(msg.payload.resident_id);
-      // 群聊可能多句，逐句入面板（“正在想”占位符由 addChatLine 精确移除，
+      // 群聊可能多句，逐句入面板（"正在想"占位符由 addChatLine 精确移除，
       // 不能全局清：同时对两人说话时，B 的回复不能误删 A 的占位）
       const lines = (msg.payload.lines ?? []) as Array<[string, string]>;
       for (const [speaker, text] of lines) {
@@ -441,13 +549,12 @@ export class TownScene extends Phaser.Scene {
     } else if (msg.type === "event_log") {
       this.hud.addEvent(String(msg.payload.game_time), String(msg.payload.text));
     } else if (msg.type === "save_ack") {
-      // 存档确认（WS "save" 的回包；日常存档靠服务端 autosave，无需消息）
       const ok = Boolean(msg.payload.ok);
       const gameTime = String(msg.payload.game_time ?? "");
       this.hud.flashHint(ok ? `已存档（${gameTime}）` : "存档失败，稍后再试", 2500);
     } else if (msg.type === "error") {
       // 错误到达 = 这句话不会有回复了：占位符必须撤掉，
-      // 否则“正在想…”永久挂死（旧版 too_far 就有这个问题）
+      // 否则"正在想…"永久挂死（旧版 too_far 就有这个问题）
       this.hud.hideThinking(this.chatTarget);
       const code = String(msg.payload.code ?? "");
       // flashHint：面板打开时 update 每帧 setHint(null)，普通 hint 会被
@@ -475,9 +582,11 @@ export class TownScene extends Phaser.Scene {
     if (!rv) {
       // 首次出现：直接落位（没有"从 (0,0) 走过来"可言）
       const charIndex = CHARACTER_INDEX[id] ?? 0;
-      const sprite = this.add.sprite(x, y, "folk", walkFrames(charIndex, "down")[0]);
+      const sprite = this.add.sprite(x, y, "folk", idleFrame(charIndex, "down"));
+      sprite.setOrigin(0.5, 0.75); // 与玩家同一锚点语义：y = 逻辑格中心
       sprite.setData("charIndex", charIndex);
       sprite.setData("dir", "down");
+      const shadow = this.add.image(x, y + SHADOW_OFFSET_Y, "shadow").setDepth(y - 1);
       // 头顶名牌：大字号 + scale 缩小，跟随居民世界坐标
       const label = this.add
         .text(x, y - LABEL_OFFSET_Y, name, {
@@ -487,16 +596,16 @@ export class TownScene extends Phaser.Scene {
         })
         .setOrigin(0.5, 1)
         .setScale(0.5);
-      rv = { id, name, sprite, label, target: { x, y }, action, emoji: "", moving: false };
+      rv = { id, name, sprite, shadow, label, target: { x, y }, action, emoji: "", moving: false };
       this.residents.set(id, rv);
-    } else if (
-      Phaser.Math.Distance.Between(rv.sprite.x, rv.sprite.y, x, y) > RESIDENT_SNAP_DISTANCE
-    ) {
-      // 断线重连/瞬移：直接贴齐，不插值（否则居民会横穿全图）
-      rv.sprite.setPosition(x, y);
-      rv.target = { x, y };
     } else {
-      rv.target = { x, y };
+      const snapDist = this.tileDim * 4; // 超 4 格视为瞬移（重连），直接贴齐
+      if (Phaser.Math.Distance.Between(rv.sprite.x, rv.sprite.y, x, y) > snapDist) {
+        rv.sprite.setPosition(x, y);
+        rv.target = { x, y };
+      } else {
+        rv.target = { x, y };
+      }
     }
 
     if (chatting) this.chattingIds.add(id);

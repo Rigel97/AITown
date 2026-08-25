@@ -1,28 +1,64 @@
-// mapData 单元测试：帧号计算 + 对话距离判定（与后端同几何，2026-08-21 深检 G 修复）
+// mapData 单元测试：v2 帧号计算（folk2：1 idle + 6 walk）+ 对话距离判定（与后端同几何，2026-08-21 深检 G 修复）
 import { describe, expect, it } from "vitest";
-import { PLAYER_CHARACTER, walkFrames, withinChebyshevTiles } from "./mapData";
+import {
+  FOLK_FRAME_H,
+  FOLK_FRAME_W,
+  PLAYER_CHARACTER,
+  idleFrame,
+  propFootprint,
+  walkFrames,
+  withinChebyshevTiles,
+} from "./mapData";
 
-describe("walkFrames", () => {
-  it("玩家（f8，index 7）四方向各 3 帧连续帧号", () => {
+describe("walkFrames（folk2：每角 7 帧，帧 0 = idle，1-6 = walk）", () => {
+  it("玩家（index 7）四方向各 6 帧连续帧号，且不含 idle 帧", () => {
     for (const dir of ["down", "left", "right", "up"] as const) {
       const frames = walkFrames(PLAYER_CHARACTER, dir);
-      expect(frames).toHaveLength(3);
-      expect(frames[1] - frames[0]).toBe(1);
-      expect(frames[2] - frames[1]).toBe(1);
+      expect(frames).toHaveLength(6);
+      for (let i = 1; i < frames.length; i++) {
+        expect(frames[i] - frames[i - 1]).toBe(1);
+      }
+      expect(frames[0]).toBe(idleFrame(PLAYER_CHARACTER, dir) + 1);
     }
   });
 
-  it("帧号始终落在精灵表内（非负）且方向间不重叠", () => {
+  it("帧号始终落在精灵表内（非负）且角色×方向间不重叠", () => {
     const all: number[] = [];
     for (let i = 0; i <= 7; i++) {
       for (const dir of ["down", "left", "right", "up"] as const) {
+        all.push(idleFrame(i, dir));
         for (const f of walkFrames(i, dir)) {
           expect(f).toBeGreaterThanOrEqual(0);
           all.push(f);
         }
       }
     }
-    expect(new Set(all).size).toBe(all.length); // 8 角色 × 4 方向 × 3 帧互不重叠
+    // 8 角色 × 4 方向 × 7 帧互不重叠
+    expect(new Set(all).size).toBe(all.length);
+    expect(all.length).toBe(8 * 4 * 7);
+  });
+});
+
+describe("propFootprint（与服务端 build_map.py 同推导）", () => {
+  it("偶/奇宽足迹从锚点回推左列正确", () => {
+    // bw=4、锚 col=5：builder 的 anchor = pc + bw//2 → pc = 5-2 = 3
+    expect(propFootprint({ img: "cottage_red", col: 5, row: 22, bw: 4, bh: 2 })).toEqual({
+      c0: 3,
+      r0: 21,
+      c1: 6,
+      r1: 22,
+    });
+    // bw=5、锚 col=20：pc = 20-2 = 18
+    expect(propFootprint({ img: "manor_blue", col: 20, row: 11, bw: 5, bh: 2 })).toEqual({
+      c0: 18,
+      r0: 10,
+      c1: 22,
+      r1: 11,
+    });
+  });
+
+  it("bw=0 的贴花无足迹（返回 null）", () => {
+    expect(propFootprint({ img: "flowerbed", col: 3, row: 4, bw: 0, bh: 0 })).toBeNull();
   });
 });
 
@@ -52,5 +88,12 @@ describe("withinChebyshevTiles（与服务端 CHAT_RANGE_TILES 同几何）", ()
     // 恰好 3 格差（格 0 vs 格 3，x=96/97 都在第 3 格）→ 允许；第 4 格（x=128）→ 拒绝
     expect(withinChebyshevTiles(0, 0, 97, 0, T, RANGE)).toBe(true);
     expect(withinChebyshevTiles(0, 0, 128, 0, T, RANGE)).toBe(false);
+  });
+});
+
+describe("素材常量（folk2 表几何，与 assets/v2/folk2.png 对齐）", () => {
+  it("帧尺寸 32×64（角色 1 格宽 2 格高）", () => {
+    expect(FOLK_FRAME_W).toBe(32);
+    expect(FOLK_FRAME_H).toBe(64);
   });
 });

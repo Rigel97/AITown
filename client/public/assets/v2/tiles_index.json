@@ -1,0 +1,18 @@
+{
+  "sv_grass": 0,
+  "farm_grass": 1,
+  "farm_grass_var": 2,
+  "sv_dirt": 3,
+  "stone_path": 4,
+  "road_tl": 5,
+  "road_tr": 6,
+  "road_bl": 7,
+  "road_br": 8,
+  "sv_water": 9,
+  "sv_sand": 10,
+  "plaza": 11,
+  "wood_deck": 12,
+  "env_floor": 13,
+  "env_wall": 14,
+  "env_door": 15
+}

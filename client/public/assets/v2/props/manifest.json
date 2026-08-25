@@ -1,0 +1,122 @@
+{
+  "cottage_red": {
+    "w": 112,
+    "h": 118,
+    "blocks": null
+  },
+  "cottage_green": {
+    "w": 112,
+    "h": 118,
+    "blocks": null
+  },
+  "cottage_blue": {
+    "w": 112,
+    "h": 118,
+    "blocks": null
+  },
+  "cottage_hq": {
+    "w": 140,
+    "h": 120,
+    "blocks": null
+  },
+  "hedge": {
+    "w": 64,
+    "h": 64,
+    "blocks": null
+  },
+  "signpost": {
+    "w": 48,
+    "h": 56,
+    "blocks": null
+  },
+  "flowerbed": {
+    "w": 28,
+    "h": 26,
+    "blocks": null
+  },
+  "rock": {
+    "w": 48,
+    "h": 44,
+    "blocks": null
+  },
+  "pebbles": {
+    "w": 32,
+    "h": 32,
+    "blocks": null
+  },
+  "law_plot": {
+    "w": 182,
+    "h": 118,
+    "blocks": null
+  },
+  "manor_red": {
+    "w": 144,
+    "h": 120,
+    "blocks": null
+  },
+  "manor_green": {
+    "w": 144,
+    "h": 120,
+    "blocks": null
+  },
+  "manor_blue": {
+    "w": 144,
+    "h": 120,
+    "blocks": null
+  },
+  "house2_a": {
+    "w": 144,
+    "h": 112,
+    "blocks": null
+  },
+  "house2_b": {
+    "w": 144,
+    "h": 112,
+    "blocks": null
+  },
+  "tower_red": {
+    "w": 80,
+    "h": 120,
+    "blocks": null
+  },
+  "oak_s": {
+    "w": 96,
+    "h": 160,
+    "blocks": null
+  },
+  "oak_m": {
+    "w": 128,
+    "h": 192,
+    "blocks": null
+  },
+  "oak_l": {
+    "w": 160,
+    "h": 224,
+    "blocks": null
+  },
+  "well": {
+    "w": 64,
+    "h": 60,
+    "blocks": null
+  },
+  "stall": {
+    "w": 96,
+    "h": 80,
+    "blocks": null
+  },
+  "crate": {
+    "w": 36,
+    "h": 34,
+    "blocks": null
+  },
+  "crate_stack": {
+    "w": 36,
+    "h": 64,
+    "blocks": null
+  },
+  "scarecrow": {
+    "w": 80,
+    "h": 92,
+    "blocks": null
+  }
+}

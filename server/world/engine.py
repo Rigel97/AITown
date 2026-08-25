@@ -38,7 +38,14 @@ from memory.store import add_memory
 from world.chronicle import record
 from world.clock import WorldClock
 from world.locations import LOCATION_SPOTS
-from world.mapdata import SPAWN_COL, SPAWN_ROW, to_pixel_center, to_tile
+from world.mapdata import (
+    SPAWN_COL,
+    SPAWN_ROW,
+    is_walkable,
+    nearest_walkable,
+    to_pixel_center,
+    to_tile,
+)
 from world.pathfinding import find_path
 from world.persistence import (
     SAVE_ERRORS,
@@ -163,6 +170,22 @@ class ResidentRuntime:
             "occupation": self.info.occupation,
             "chatting": self.conversation_id is not None,
         }
+
+
+def _sanitize_xy(x: int, y: int, fallback: tuple[int, int]) -> tuple[int, int]:
+    """坐标净化：不可走（越界/落在建筑水面）时投射到最近可走格。
+
+    为什么在 import_state 需要：换地图后旧存档坐标可能超出新世界边界或
+    落在新建筑上一一不净化的话居民/玩家会卡在不可走点，寻路起点非法。
+    fallback = 投射失败时的兑底（出生点 / seed 坐标）。
+    """
+    col, row = to_tile(x), to_tile(y)
+    if is_walkable(col, row):
+        return x, y
+    near = nearest_walkable(col, row)
+    if near is None:
+        return fallback
+    return to_pixel_center(near[0]), to_pixel_center(near[1])
 
 
 class WorldEngine:
@@ -606,14 +629,21 @@ class WorldEngine:
         player = state["player"]
         self.clock.day = int(clock["day"])
         self.clock.minutes = float(clock["minutes"])
-        self.player["x"] = int(player["x"])
-        self.player["y"] = int(player["y"])
+        # 换图后的旧坐标可能越界/落在建筑上：投射到最近可走格（见 _sanitize_xy）
+        self.player["x"], self.player["y"] = _sanitize_xy(
+            int(player["x"]),
+            int(player["y"]),
+            (to_pixel_center(SPAWN_COL), to_pixel_center(SPAWN_ROW)),
+        )
         for r in state["residents"]:
             rt = self.residents.get(str(r.get("id")))
             if rt is None:
                 continue  # 存档里有但当前定档没有（人设已删）——跳过
-            rt.info.x = int(r["x"])
-            rt.info.y = int(r["y"])
+            rt.info.x, rt.info.y = _sanitize_xy(
+                int(r["x"]),
+                int(r["y"]),
+                (rt.info.x, rt.info.y),
+            )
             rt.planned_day = int(r.get("planned_day", 0))
             rt.reflected_day = int(r.get("reflected_day", 0))
             rt.current_location = r.get("current_location")

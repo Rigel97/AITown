@@ -10,7 +10,8 @@
 	License: (Creative Commons Zero, CC0)
 	http://creativecommons.org/publicdomain/zero/1.0/
 
-	This content is free to use in personal, educational and commercial projects.
+	This content is free to use in personal, educational and commercial projects.
+
 	Support us by crediting Kenney or www.kenney.nl (this is not mandatory)
 
 			------------------------------
@@ -20,3 +21,13 @@
 
 	Follow on Twitter for updates:
 	http://twitter.com/KenneyNL
+
+			------------------------------
+
+Modern Exteriors / Modern Farm tiles & characters
+by LimeZu — https://limezu.itch.io/
+License: CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)
+Used in this project: Serene Village sheet, Modern Exteriors 32x32 tileset,
+Modern Farm v1 trees/props, Premade Character 32x32 sheets.
+Obtained via public GitHub mirrors (jordan-schnur/city_sim, hubhacker/BubbleTopia,
+Frankfangcode/GaiaCraft_godot); processed (cropped/composed) by build scripts.
