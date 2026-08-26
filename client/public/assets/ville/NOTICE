@@ -1,0 +1,16 @@
+the_ville map data & tile assets
+================================
+
+Source:   joonspk-research/generative_agents (Stanford "Generative Agents" project)
+          https://github.com/joonspk-research/generative_agents
+Via:      x-glacier/GenerativeAgentsCN (Chinese localization fork)
+          https://github.com/x-glacier/GenerativeAgentsCN
+License:  Apache License 2.0 (see LICENSE in this directory)
+
+Modifications (per Apache-2.0 §4b):
+- Map cropped from the original 140x100 "the Ville" to window x[14,135] x y[6,40]
+  (122x35 tiles) by client/scripts/the_ville_src/convert_ville_map.py
+- Sector (room) names re-mapped to AITown's own resident/location names
+- Walkability grid post-processed: cells unreachable from the player spawn
+  within the cropped window are marked non-walkable
+- Only the 13 tileset images actually used by the cropped window are bundled

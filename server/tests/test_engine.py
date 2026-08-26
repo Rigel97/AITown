@@ -349,11 +349,11 @@ async def test_player_chat_solo_pauses_resident(
     """
     eng = WorldEngine()
     ra = ResidentRuntime(_resident("a", "甲"))
-    ra.plan = [PlanEntry("00:00", "广场", "闲逛")]
+    ra.plan = [PlanEntry("00:00", "主街", "闲逛")]
     eng.residents["a"] = ra
-    # 居民放在广场站位旁一格（index 0 → spots[0]=(22,14)，驻足解除后一步可达）
-    ra.info.x, ra.info.y = to_pixel_center(23), to_pixel_center(14)
-    eng.player = {"x": to_pixel_center(23), "y": to_pixel_center(14)}
+    # 居民放在主街站位旁一格（index 0 → spots[0]=(52,23)，驻足解除后一步可达）
+    ra.info.x, ra.info.y = to_pixel_center(53), to_pixel_center(23)
+    eng.player = {"x": to_pixel_center(53), "y": to_pixel_center(23)}
     monkeypatch.setattr(we, "record", lambda *args, **kwargs: None)
 
     async def slow_reply(*args: object, **kwargs: object) -> str:
@@ -371,12 +371,12 @@ async def test_player_chat_solo_pauses_resident(
     # 驻足期间：不动、不执行计划，动作文案变“聊天中”
     eng._step_resident(ra)
     assert ra.current_action == "聊天中"
-    assert (to_tile(ra.info.x), to_tile(ra.info.y)) == (23, 14)
+    assert (to_tile(ra.info.x), to_tile(ra.info.y)) == (53, 23)
     # pause 过期（时间快进 10+ 游戏分钟）：恢复执行计划
     eng.clock.tick(we.PLAYER_CHAT_PAUSE_MINUTES + 1)
     eng._step_resident(ra)
     assert ra.current_action == "闲逛"
-    assert (to_tile(ra.info.x), to_tile(ra.info.y)) != (23, 14)
+    assert (to_tile(ra.info.x), to_tile(ra.info.y)) != (53, 23)
 
 
 @pytest.mark.asyncio
@@ -559,3 +559,66 @@ async def test_end_conversation_cleans_conv_cooldown_keys(
 
     assert join_key not in eng._encounter_cd  # 对话键被清
     assert pair_key in eng._encounter_cd  # 居民对冷却保留（散场后一段时间不重聊）
+
+
+# ---------- 家具交互点：站位引导与细粒度感知（V3 Phase D） ----------
+
+
+def _shelf_block():
+    from world.objects import BLOCKS_BY_SECTOR
+
+    return next(b for b in BLOCKS_BY_SECTOR["小镇图书馆"] if b.name == "书架")
+
+
+def test_spot_for_guides_to_matched_furniture() -> None:
+    """站位引导：action 提到书架 → 站到书架使用点，而不是普通站位点。"""
+    eng = WorldEngine()
+    rt = ResidentRuntime(_resident("a", "甲"))
+    eng.residents.update(a=rt)
+    shelf = _shelf_block()
+    target = eng._spot_for(rt, "小镇图书馆", "把书架上的书摆整齐")
+    assert target == (shelf.col, shelf.row)
+
+
+def test_spot_for_falls_back_when_furniture_taken() -> None:
+    """使用点被占（其他居民 ≤1 格）→ 回退普通站位点，不与家具旁的人重叠。"""
+    from world.locations import LOCATION_SPOTS
+
+    eng = WorldEngine()
+    ra = ResidentRuntime(_resident("a", "甲"))
+    rb = ResidentRuntime(_resident("b", "乙"))
+    eng.residents.update(a=ra, b=rb)
+    shelf = _shelf_block()
+    rb.info.x, rb.info.y = to_pixel_center(shelf.col), to_pixel_center(shelf.row)
+    target = eng._spot_for(ra, "小镇图书馆", "整理书架")
+    assert target != (shelf.col, shelf.row)
+    assert target in LOCATION_SPOTS["小镇图书馆"]
+
+
+def test_arrival_event_mentions_furniture() -> None:
+    """到达事件带家具语义（"来到了小镇图书馆，在书架旁"）——涌现叙事的可见性。"""
+    eng = WorldEngine()
+    rt = ResidentRuntime(_resident("a", "甲"))
+    eng.residents.update(a=rt)
+    shelf = _shelf_block()
+    rt.plan = [PlanEntry("08:00", "小镇图书馆", "整理书架")]
+    rt.info.x, rt.info.y = to_pixel_center(shelf.col), to_pixel_center(shelf.row)
+    eng._step_resident(rt)
+    assert any("在书架旁" in e for e in eng._pending_events)
+
+
+def test_public_derives_near_object_when_stationary() -> None:
+    """public() 细粒度感知：站定在家具旁 + action 相关 + 地点一致 → 下发
+    near_object；走路中不下发（防"在冰箱旁赶路"的路过误报）。"""
+    eng = WorldEngine()
+    rt = ResidentRuntime(_resident("a", "甲"))
+    eng.residents.update(a=rt)
+    shelf = _shelf_block()
+    rt.info.x, rt.info.y = to_pixel_center(shelf.col), to_pixel_center(shelf.row)
+    rt.current_location = "小镇图书馆"
+    rt.current_action = "在书架前看书"
+    d = rt.public()
+    assert d.get("near_object") == "书架"
+    # 走路中：同位置但 path 非空 → 不报
+    rt.path = [(shelf.col + 1, shelf.row)]
+    assert "near_object" not in rt.public()

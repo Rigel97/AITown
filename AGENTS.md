@@ -59,10 +59,10 @@ Do NOT modify these without explicit human approval:
 - **Workflow Discipline:** Pre-commit hooks must pass before commits (or ask before bypassing). If verification fails, fix it before continuing.
 
 ## Current State 📍
-**Last Updated:** 2026-08-22
-**Working On:** Phase 4（Security pass → 朋友演示 → 7 天北极星验证）；Phase 3 全部完成 ✅
-**Recently Completed:** Phase 2 全部；2026-08-21 深检修复 14 项；2026-08-22 五轮优化 22 项 + 成本校准实测 ¥0.76/游戏日（目标 ¥2.1 达标）+ 模型选型定案（chat 层回退 M2.7，三层：杂活/对话 M2.7 + 反思 M3），后端 130 测 + 前端 10 测 + lint 零违规，浏览器实测全闭环
-**Blocked By:** 无（模型选型已定案，无待拍板项）
+**Last Updated:** 2026-08-26
+**Working On:** V3 视觉大改版（the_ville 裁剪版地图）；Phase A/B/C/D 全部完成 ✅，下一步 V3 居民落库（seed 重写 + 缓存重置需拍板）
+**Recently Completed:** Phase 3 全部 + V3 Phase A（七人新叙事体人设拍板）→ B（the_ville 裁剪管线 122×35）→ C（前端多层瓦片渲染 + y-sort + 阻挡合并）→ D（105 家具交互点自动命名 + 细粒度感知三层接线：站位引导/near_object 广播/对话地点细化，零 LLM 成本）；后端 145 测 + 前端 23 测 + lint 零违规，浏览器实测全闭环
+**Blocked By:** 无（V3 居民落库需用户拍板：改人设 = 一次性重置 Prompt 缓存 + 重估成本）
 
 ## Roadmap 🗺️
 

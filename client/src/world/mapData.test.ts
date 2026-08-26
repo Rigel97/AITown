@@ -1,11 +1,11 @@
-// mapData 单元测试：v2 帧号计算（folk2：1 idle + 6 walk）+ 对话距离判定（与后端同几何，2026-08-21 深检 G 修复）
+// mapData 单元测试：folk2 帧号计算 + 对话距离判定（与后端同几何）+ v3 阻挡网格合并
 import { describe, expect, it } from "vitest";
 import {
   FOLK_FRAME_H,
   FOLK_FRAME_W,
   PLAYER_CHARACTER,
+  blockedRuns,
   idleFrame,
-  propFootprint,
   walkFrames,
   withinChebyshevTiles,
 } from "./mapData";
@@ -39,26 +39,33 @@ describe("walkFrames（folk2：每角 7 帧，帧 0 = idle，1-6 = walk）", () 
   });
 });
 
-describe("propFootprint（与服务端 build_map.py 同推导）", () => {
-  it("偶/奇宽足迹从锚点回推左列正确", () => {
-    // bw=4、锚 col=5：builder 的 anchor = pc + bw//2 → pc = 5-2 = 3
-    expect(propFootprint({ img: "cottage_red", col: 5, row: 22, bw: 4, bh: 2 })).toEqual({
-      c0: 3,
-      r0: 21,
-      c1: 6,
-      r1: 22,
-    });
-    // bw=5、锚 col=20：pc = 20-2 = 18
-    expect(propFootprint({ img: "manor_blue", col: 20, row: 11, bw: 5, bh: 2 })).toEqual({
-      c0: 18,
-      r0: 10,
-      c1: 22,
-      r1: 11,
-    });
+describe("blockedRuns（阻挡网格按行合并，v3 物理体来源）", () => {
+  it("同一行的连续阻挡格合并为一个矩形", () => {
+    // 第 0 行：前 3 格阻挡 → 一个 w=3 的矩形
+    const runs = blockedRuns([
+      [false, false, false, true, true],
+      [true, true, true, true, true],
+    ]);
+    expect(runs).toEqual([{ col: 0, row: 0, w: 3, h: 1 }]);
   });
 
-  it("bw=0 的贴花无足迹（返回 null）", () => {
-    expect(propFootprint({ img: "flowerbed", col: 3, row: 4, bw: 0, bh: 0 })).toBeNull();
+  it("同一行多段阻挡各自成矩形，顺序自左向右", () => {
+    const runs = blockedRuns([[false, true, false, false, true, false]]);
+    expect(runs).toEqual([
+      { col: 0, row: 0, w: 1, h: 1 },
+      { col: 2, row: 0, w: 2, h: 1 },
+      { col: 5, row: 0, w: 1, h: 1 },
+    ]);
+  });
+
+  it("全可走 / 全阻挡网格的边界情况", () => {
+    expect(blockedRuns([[true, true], [true, true]])).toEqual([]);
+    expect(blockedRuns([[false, false]])).toEqual([{ col: 0, row: 0, w: 2, h: 1 }]);
+  });
+
+  it("行尾阻挡也能闭合（越界哨兵触发的收尾分支）", () => {
+    const runs = blockedRuns([[true, false, false]]);
+    expect(runs).toEqual([{ col: 1, row: 0, w: 2, h: 1 }]);
   });
 });
 

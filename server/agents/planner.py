@@ -28,11 +28,14 @@ from llm.client import chat
 from memory.retrieve import retrieve
 from memory.store import add_memory
 from world.clock import parse_game_time
+from world.locations import LOCATION_SPOTS
 
 logger = logging.getLogger(__name__)
 
-# 计划允许使用的地点（与地图/mapData、记忆词表保持一致）
-LOCATIONS = ["面包店", "杂货店", "花店", "图书馆", "餐馆", "北宅", "东南宅", "广场"]
+# 计划允许使用的地点：从地图数据派生（town_map_v3.json 的 locations，
+# 转换管线产出）——换地图/改地名自动同步，与人设 prompt_prefix 引用的
+# 地名一致性由 world_context 的场所清单共同约束
+LOCATIONS = sorted(LOCATION_SPOTS.keys())
 
 # 合法计划时间 "HH:MM"。LLM 偶尔输出 "07:00:00"（带秒）"7点""早上"——
 # 这类畸形时间曾在 current_plan_entry 的时间解包里抛 ValueError，而主循环
@@ -60,8 +63,8 @@ class PlanEntry:
 
 
 def _default_plan() -> list[PlanEntry]:
-    """解析失败/LMM 超时时的降级日程：在原地附近待着。"""
-    return [PlanEntry("08:00", "广场", "随便逛逛，看看今天镇上有什么新鲜事")]
+    """解析失败/LLM 超时时的降级日程：去主街待着（存在性由 locations.py 启动校验）。"""
+    return [PlanEntry("08:00", "主街", "随便逛逛，看看今天镇上有什么新鲜事")]
 
 
 def build_plan_prompt(

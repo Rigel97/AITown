@@ -45,7 +45,7 @@ def test_world_context_lists_all_residents_and_places(tmp_path: Path) -> None:
     block = world_context(db)
     for name in ("林师傅", "苏晚", "阿茉", "老周", "红姐", "小豆子", "老宋"):
         assert name in block
-    for place in ("面包店", "餐馆", "广场"):
+    for place in ("青梧咖啡", "九号酒馆", "主街"):
         assert place in block
     assert "不要编造" in block
 

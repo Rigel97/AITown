@@ -1,53 +1,64 @@
-// 主小镇场景（Phaser v4）—— v2 视觉：LimeZu 系素材 + 整 Sprite 建筑 + 昼夜光照
+// 主小镇场景（Phaser v4）—— v3 地图：the_ville 裁剪版 + 多 tileset 瓦片渲染
 // 设计说明（为什么这样设计）：
-// - 地图从共享 town_map.json 读取（与服务端寻路同源）：v2 格式 = 2 层地面
-//   tilemap（地面 + 草地变种贴花）+ props 整 Sprite（建筑/树木/道具）。
-//   建筑不再用瓦片拼墙：Sprite depth = 底边 y，角色可以走到树冠/屋顶
-//   "后面"被正确遮挡（旧的 obj 瓦片层做不到）。
-// - 阻挡：props 的 bw×bh 足迹 → 每件一个隐形 static body + collider；
-//   足迹与服务端 walkable 网格同源（build_map.py 一个来源推导），
-//   客户端物理体与服务端寻路永远不会打架。
-// - 资产两阶段加载：preload 只装 JSON；create 读出 tileset/props 清单后
-//   动态发起第二阶段加载（图片文件名在 JSON 里，写死会两处维护），
+// - 地图 town_map_v3.json 是「Tiled 标准地图 + 项目世界数据」一体：Phaser
+//   load.tilemapTiledJSON 直接解析 10 层 × 13 tileset（gid→tileset 归属与
+//   翻转标志都是引擎原生行为，前端零二次映射）；walkable/出生点/站位点
+//   由转换管线预计算，服务端寻路共读同一份文件——前端碰撞与服务端
+//   判定永远不会打架。
+// - 层次（自下而上）：前 8 层（地面/外墙/家具）→ 角色（depth=y）→
+//   Foreground L1/L2（树冠/吧台等半透明前景，固定高 depth 压过角色）→
+//   HUD。the_ville 是娃娃房式敞开室内（数据验证过：无屋顶层），不存在
+//   “进屋屋顶变透明”的需求；角色站到吧台/树冠“后面”会被前景层正确
+//   盖住上半身，这是 v3 的遮挡语言（v2 靠 props depth=y，v3 靠层序）。
+// - 阻挡：walkable 网格按行合并成 ~270 个矩形 → 隐形静态体静态组 +
+//   单条 collider；网格与服务端寻路同源。
+// - 资产两阶段加载：preload 只装 JSON（Tiled 解析 + meta 各一份——同一
+//   文件两种缓存，meta 负责 walkable/出生点/tileset 图片清单）；create
+//   读出清单后动态发起第二阶段加载（13 张 tileset PNG + folk/shadow），
 //   完成后再 buildWorld——net 连接也等世界就绪，避免 world_state 先到
 //   而 residents 容器未建。
-// - 角色用 folk2 精灵表（每角色 7 帧 × 4 向，帧 32×64：角色 1 格宽 2 格高，
-//   更接近真人比例）。origin (0.5, 0.75)：精灵 y 仍是"逻辑格中心"（服务端
-//   坐标语义不变），脚底落在格底边；物理体只覆盖脚部 20×20。
-// - 相机 zoom 可切换（键 1/2/3）：近身逛街 ×2 与"上帝视角"×1 之间的观感
-//   差异很大，留给玩家自己选；为让文字清晰，文字一律"大字号渲染 + scale
-//   缩小"——小纹理被 zoom 放大会糊，大纹理缩放后才锐利。
+// - 角色用 folk2 精灵表（每角色 7 帧 × 4 向，帧 32×64：角色 1 格宽 2 格高）。
+//   origin (0.5, 0.75)：精灵 y 仍是"逻辑格中心"（服务端坐标语义不变），
+//   脚底落在格底边；物理体只覆盖脚部 20×20。
+// - 相机 zoom 可切换（键 1/2/3）：v3 世界 3904×1120，×2 逛街 ×1 看全镇。
+//   为让文字清晰，文字一律"大字号渲染 + scale 缩小"——小纹理被 zoom
+//   放大会糊，大纹理缩放后才锐利。
 // - 居民移动是插值的：服务端每 1/3 秒广播一个单格目标点，客户端每帧
-//   "按时到位"逼近（速度 = 剩余距离 × 广播频率）——平滑连续、不切墙角、
-//   转向精确（2026-08-19 视觉优化，修掉逐秒 96px 跳变）。
-// - 头顶名牌 = 名字 + 动作 emoji（actionEmoji 关键词映射，斯坦福
-//   pronunciato 的低成本版），让"正在干嘛"扫一眼可见。
-// - 深度即 y：所有角色（玩家/居民/名牌/道具）depth = y——脚下越靠下越靠前，
-//   聚集点（餐馆、广场）居民互相遮挡才正确。
+//   "按时到位"逼近（速度 = 剩余距离 × 广播频率）——平滑连续、不切墙角。
+// - 头顶名牌 = 名字 + 动作 emoji（actionEmoji 关键词映射）。
+// - 深度即 y：所有角色（玩家/居民/名牌/道具）depth = y——脚下越靠下越
+//   靠前，聚集点居民互相遮挡才正确。地图最北可走行 y≈208，天然压过
+//   基础图层（负 depth），前景层 9000+ 再压过一切角色。
 // - 脚下椭圆阴影：角色"贴地"的关键细节，跟随角色、depth 比本人低 1。
-// - 昼夜光照：按游戏时钟分 5 档调相机 ColorMatrix（清晨/白天/黄昏/入夜/
-//   深夜），只在档位变化时重设矩阵（不逐帧上传）。B 键可整体关闭对照。
-// - 文字 UI（对话卡/事件日志/输入）走 DOM HUD：对话是"立绘+名牌+台词"的
-//   一体化卡片（见 ui/hud.ts），画布只画像素世界（头顶名牌）。
-// - 对话打开时禁用移动，避免边打字边走路。
+// - 昼夜光照：按游戏时钟分 5 档调相机 ColorMatrix，只在档位变化时重设
+//   矩阵（不逐帧上传）。B 键可整体关闭对照。
+// - 文字 UI（对话卡/事件日志/输入）走 DOM HUD；对话打开时禁用移动。
 
 import Phaser from "phaser";
 import { NetClient, type ServerMessage } from "../net/client";
 import { Hud } from "../ui/hud";
 import { actionEmoji } from "../world/actionEmoji";
+import { doingText } from "../world/doingText";
 import {
   CHARACTER_INDEX,
   FOLK_FRAME_H,
   FOLK_FRAME_W,
+  FOREGROUND_LAYER_NAMES,
   PLAYER_CHARACTER,
+  blockedRuns,
   idleFrame,
-  propAnchorPx,
-  propFootprint,
   walkFrames,
   withinChebyshevTiles,
   type Direction,
-  type TownMapData,
+  type VilleMapData,
 } from "../world/mapData";
+
+/** 地图文件（前后端共读；改地图 = 改转换脚本重跑，不足改这里） */
+const MAP_FILE = "assets/town_map_v3.json";
+/** 基础图层深度：全部压在角色（depth=y≥208）之下，取负远离碰撞边界 */
+const BASE_LAYER_DEPTH = -1000;
+/** 前景层深度：压过一切角色（y 最大 ~1120）与名牌，仍低于 HUD */
+const FOREGROUND_DEPTH = 9000;
 
 /** 相机缩放档位（键 1/2/3 直达）。×1 一屏 30×20 格，接近斯坦福"上帝视角" */
 const CAMERA_ZOOMS = [2, 1.5, 1] as const;
@@ -103,6 +114,8 @@ interface ResidentVisual {
   target: { x: number; y: number };
   /** 最近一次服务端动作文本（走近提示用） */
   action: string;
+  /** 服务端细粒度感知：站定时身边的家具名（Phase D，无则空串） */
+  nearObject: string;
   /** 当前头顶 emoji（变化才 setText，避免每拍重建文字纹理） */
   emoji: string;
   moving: boolean;
@@ -138,79 +151,72 @@ export class TownScene extends Phaser.Scene {
   }
 
   preload(): void {
-    // 只装地图 JSON：tileset/props 文件名要从 JSON 里读，第二阶段再装
-    this.load.json("town-map", "assets/town_map.json");
+    // 同一文件装两份：Tiled 解析（tilemap 缓存）+ 项目字段（json 缓存）。
+    // tilemapTiledJSON 不吐 walkable/出生点这些自定义字段，分开读各自职责
+    this.load.tilemapTiledJSON("ville-map", MAP_FILE);
+    this.load.json("ville-meta", MAP_FILE);
   }
 
   create(): void {
-    const townMap = this.cache.json.get("town-map") as TownMapData;
-    if (townMap.version !== 2) {
-      throw new Error(`town_map.json 版本不符（${townMap.version}），请重跑 client/scripts/build_map.py`);
+    const meta = this.cache.json.get("ville-meta") as VilleMapData;
+    if (meta.version !== 3) {
+      throw new Error(
+        `town_map_v3.json 版本不符（${meta.version}），请重跑 client/scripts/the_ville_src/convert_ville_map.py`,
+      );
     }
-    // —— 第二阶段加载：地图声明的全部图片 ——
-    this.load.image("town-tiles", townMap.tileset);
+    // —— 第二阶段加载：folk/shadow + 地图声明的全部 tileset 图片 ——
     this.load.spritesheet("folk", "assets/v2/folk2.png", {
       frameWidth: FOLK_FRAME_W,
       frameHeight: FOLK_FRAME_H,
     });
     this.load.image("shadow", "assets/v2/shadow.png");
-    const propImgs = new Set(townMap.props.map((p) => p.img));
-    for (const img of propImgs) {
-      this.load.image(`prop-${img}`, `assets/v2/props/${img}.png`);
+    for (const ts of meta.tilesets) {
+      this.load.image(ts.name, ts.image); // 纹理键 = tileset 名，addTilesetImage 直接绑定
     }
-    this.load.once(Phaser.Loader.Events.COMPLETE, () => this.buildWorld(townMap));
+    this.load.once(Phaser.Loader.Events.COMPLETE, () => this.buildWorld(meta));
     this.load.start();
   }
 
-  /** 世界装配：v2 地面 tilemap + props 道具层 + 角色 + 相机/HUD/网络 */
-  private buildWorld(townMap: TownMapData): void {
-    this.tileDim = townMap.tileDim;
-    this.worldWidth = townMap.cols * this.tileDim;
-    this.worldHeight = townMap.rows * this.tileDim;
+  /** 世界装配：v3 瓦片图层 + 阻挡静态体 + 角色 + 相机/HUD/网络 */
+  private buildWorld(meta: VilleMapData): void {
+    this.tileDim = meta.tileDim;
+    this.worldWidth = meta.cols * this.tileDim;
+    this.worldHeight = meta.rows * this.tileDim;
 
-    // —— 地面 tilemap（bg0 地面 / bg1 草地变种贴花；不挂碰撞）——
-    for (const layerData of townMap.bgLayers) {
-      const map = this.make.tilemap({
-        data: layerData,
-        tileWidth: this.tileDim,
-        tileHeight: this.tileDim,
-      });
-      const tiles = map.addTilesetImage("town-tiles");
-      if (!tiles) throw new Error("tileset 加载失败");
-      const layer = map.createLayer(0, tiles, 0, 0);
-      if (!layer) throw new Error("layer 创建失败");
+    // —— 瓦片图层：数组顺序 = 自下而上；前景两层固定高 depth 压过角色 ——
+    const map = this.make.tilemap({ key: "ville-map" });
+    const bound = meta.tilesets.map((ts) => map.addTilesetImage(ts.name, ts.name));
+    if (bound.some((t) => t === null)) {
+      throw new Error("tileset 绑定失败（图片未加载或名字不匹配）");
     }
-
-    // —— props 道具层：建筑/树木整 Sprite，depth=底边；足迹 → 隐形碰撞体 ——
-    const obstacles: Phaser.GameObjects.Rectangle[] = [];
-    for (const p of townMap.props) {
-      const anchor = propAnchorPx(p, this.tileDim);
-      const depth = (p.row + 1) * this.tileDim;
-      const img = this.add.image(anchor.x, anchor.y, `prop-${p.img}`).setOrigin(0.5, 1);
-      const foot = propFootprint(p);
-      if (foot) {
-        img.setDepth(depth);
-        const cx = ((foot.c0 + foot.c1 + 1) / 2) * this.tileDim;
-        const cy = ((foot.r0 + foot.r1 + 1) / 2) * this.tileDim;
-        const rect = this.add
-          .rectangle(
-            cx,
-            cy,
-            (foot.c1 - foot.c0 + 1) * this.tileDim,
-            (foot.r1 - foot.r0 + 1) * this.tileDim,
-          )
-          .setVisible(false);
-        this.physics.add.existing(rect, true); // static body
-        obstacles.push(rect);
+    // 类型收窄：some-null 检查不会自动窄化数组元素，用类型守卫 filter
+    const tilesets = bound.filter((t): t is Phaser.Tilemaps.Tileset => t !== null);
+    let baseCount = 0;
+    for (const layer of meta.layers) {
+      const created = map.createLayer(layer.name, tilesets, 0, 0);
+      if (!created) throw new Error(`图层创建失败：${layer.name}`);
+      if (FOREGROUND_LAYER_NAMES.has(layer.name)) {
+        created.setDepth(FOREGROUND_DEPTH);
       } else {
-        // 贴花（花坛/碎石）：贴地面，任何角色/道具都能盖住它
-        img.setDepth(p.row * this.tileDim + 1);
+        created.setDepth(BASE_LAYER_DEPTH + baseCount);
+        baseCount += 1;
       }
     }
 
+    // —— 阻挡：walkable 网格按行合并成矩形 → 隐形静态体静态组 + 单 collider ——
+    const obstacles = this.physics.add.staticGroup();
+    for (const run of blockedRuns(meta.walkable)) {
+      const cx = (run.col + run.w / 2) * this.tileDim;
+      const cy = (run.row + run.h / 2) * this.tileDim;
+      const rect = this.add
+        .rectangle(cx, cy, run.w * this.tileDim, run.h * this.tileDim)
+        .setVisible(false);
+      obstacles.add(rect); // 静态组自动建静态体（尺寸=矩形宽高）
+    }
+
     // —— 玩家 ——
-    const pc = townMap.playerSpawn.col * this.tileDim + this.tileDim / 2;
-    const pr = townMap.playerSpawn.row * this.tileDim + this.tileDim / 2;
+    const pc = meta.playerSpawn.col * this.tileDim + this.tileDim / 2;
+    const pr = meta.playerSpawn.row * this.tileDim + this.tileDim / 2;
     this.player = this.physics.add.sprite(pc, pr, "folk", idleFrame(PLAYER_CHARACTER, "down"));
     // origin (0.5, 0.75)：y 语义 = 逻辑格中心（服务端坐标），脚底落格底边
     this.player.setOrigin(0.5, 0.75);
@@ -224,7 +230,7 @@ export class TownScene extends Phaser.Scene {
     this.player.setData("dir", "down");
     this.player.setCollideWorldBounds(true);
     this.physics.world.setBounds(0, 0, this.worldWidth, this.worldHeight);
-    for (const o of obstacles) this.physics.add.collider(this.player, o);
+    this.physics.add.collider(this.player, obstacles);
 
     // 脚下阴影（比本人低 1 层，跟随移动）
     this.playerShadow = this.add
@@ -354,7 +360,7 @@ export class TownScene extends Phaser.Scene {
       if (this.chattingIds.has(nearest.id)) {
         this.hud.setHint(`按 Enter 加入 ${nearest.name} 的对话`);
       } else {
-        const doing = nearest.action ? `（正在${nearest.action}）` : "";
+        const doing = doingText(nearest.action, nearest.nearObject);
         this.hud.setHint(`按 Enter 和 ${nearest.name} 说话${doing}`);
       }
     } else {
@@ -577,6 +583,8 @@ export class TownScene extends Phaser.Scene {
     const action = String(r.action ?? "");
     const occupation = String(r.occupation ?? "");
     const chatting = Boolean(r.chatting);
+    // near_object 是可选字段（走路中/身边无家具时服务端不下发）
+    const nearObject = typeof r.near_object === "string" ? r.near_object : "";
 
     let rv = this.residents.get(id);
     if (!rv) {
@@ -596,7 +604,7 @@ export class TownScene extends Phaser.Scene {
         })
         .setOrigin(0.5, 1)
         .setScale(0.5);
-      rv = { id, name, sprite, shadow, label, target: { x, y }, action, emoji: "", moving: false };
+      rv = { id, name, sprite, shadow, label, target: { x, y }, action, nearObject, emoji: "", moving: false };
       this.residents.set(id, rv);
     } else {
       const snapDist = this.tileDim * 4; // 超 4 格视为瞬移（重连），直接贴齐
@@ -618,5 +626,6 @@ export class TownScene extends Phaser.Scene {
       rv.label.setText(`${name} ${emoji}`);
     }
     rv.action = action;
+    rv.nearObject = nearObject;
   }
 }

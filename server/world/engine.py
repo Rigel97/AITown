@@ -46,6 +46,7 @@ from world.mapdata import (
     to_pixel_center,
     to_tile,
 )
+from world.objects import InteractionBlock, nearest_block, preferred_block
 from world.pathfinding import find_path
 from world.persistence import (
     SAVE_ERRORS,
@@ -160,7 +161,7 @@ class ResidentRuntime:
         self.pause_until_minutes = 0
 
     def public(self) -> dict[str, Any]:
-        return {
+        d = {
             "id": self.info.id,
             "name": self.info.name,
             "x": self.info.x,
@@ -170,6 +171,17 @@ class ResidentRuntime:
             "occupation": self.info.occupation,
             "chatting": self.conversation_id is not None,
         }
+        # 细粒度感知（Phase D）：站定时身边 2 格内与当前动作最相关的家具。
+        # 派生量不入存档快照（位置恢复后自动重算）；走路时不报，避免
+        # "在冰箱旁赶路"这种路过误报。sector 与当前地点一致才报——防止
+        # 贴门站位时出现"在主街的床旁"的跨房间缝合。
+        if not self.path:
+            blk = nearest_block(
+                to_tile(self.info.x), to_tile(self.info.y), self.current_action
+            )
+            if blk is not None and blk.sector == self.current_location:
+                d["near_object"] = blk.name
+        return d
 
 
 def _sanitize_xy(x: int, y: int, fallback: tuple[int, int]) -> tuple[int, int]:
@@ -278,12 +290,38 @@ class WorldEngine:
 
     # ---------- 计划执行（每拍，纯本地计算，不调 LLM） ----------
 
-    def _spot_for(self, rt: ResidentRuntime, location: str) -> tuple[int, int] | None:
-        """按居民序号从该地点的站位点列表里分一个，避免同地点重叠。"""
+    def _spot_for(
+        self, rt: ResidentRuntime, location: str, action: str = ""
+    ) -> tuple[int, int] | None:
+        """地点站位：action 匹配到家具时优先站到家具使用点，否则按居民
+        序号从地点的站位点列表里分一个，避免同地点重叠。
+
+        站位引导（Phase D）："在图书馆看书"→ 书架旁而不是房间正中央。
+        匹配的家具使用点若已被其他居民占着（≤1 格），回退普通站位点——
+        两人挤同一像素的视觉重叠比"没站到家具旁"更伤观感。
+        """
+        blk = preferred_block(location, action)
+        if blk is not None and not self._spot_taken(blk, rt):
+            return blk.col, blk.row
         spots = LOCATION_SPOTS.get(location)
         if not spots:
             return None
         return spots[rt.index % len(spots)]
+
+    def _spot_taken(self, blk: InteractionBlock, rt: ResidentRuntime) -> bool:
+        """家具使用点 1 格内已有其他居民（站位引导的防重叠兑底）。"""
+        for other in self.residents.values():
+            if other is rt:
+                continue
+            if (
+                max(
+                    abs(to_tile(other.info.x) - blk.col),
+                    abs(to_tile(other.info.y) - blk.row),
+                )
+                <= 1
+            ):
+                return True
+        return False
 
     def _step_resident(self, rt: ResidentRuntime) -> None:
         # 正在对话中的居民不动、不执行计划（“停下来聊”）
@@ -302,7 +340,7 @@ class WorldEngine:
             return
         rt.current_action = entry.action
 
-        target = self._spot_for(rt, entry.location)
+        target = self._spot_for(rt, entry.location, entry.action)
         if target is None:
             logger.warning("计划含未知地点 %s（%s）", entry.location, rt.info.id)
             return
@@ -312,7 +350,13 @@ class WorldEngine:
             rt.path = []
             if rt.current_location != entry.location:
                 rt.current_location = entry.location
-                self._pending_events.append(f"{rt.info.name}来到了{entry.location}")
+                blk = nearest_block(*current_tile, action=entry.action)
+                if blk is not None and blk.sector == entry.location:
+                    self._pending_events.append(
+                        f"{rt.info.name}来到了{entry.location}，在{blk.name}旁"
+                    )
+                else:
+                    self._pending_events.append(f"{rt.info.name}来到了{entry.location}")
                 self._check_encounter(rt)
             return
         if not rt.path or rt.path[-1] != target:
@@ -921,6 +965,15 @@ class WorldEngine:
 
         # 情况二：一对一对话
         location = rt.current_location or "路上"
+        # 细粒度感知（Phase D）：站定且身边有家具时，对话 prompt 里的地点
+        # 从"小镇图书馆"细化到"小镇图书馆的书架旁"——居民回答"你在哪"类
+        # 问题时不再只会报房间名。走路中不细化（感知与 public() 同一规则）。
+        if not rt.path:
+            blk = nearest_block(
+                to_tile(rt.info.x), to_tile(rt.info.y), rt.current_action
+            )
+            if blk is not None and blk.sector == rt.current_location:
+                location = f"{location}的{blk.name}旁"
         # 驻足：等回复期间不走远（见 ResidentRuntime.pause_until_minutes）
         rt.pause_until_minutes = self._now_game_minutes() + PLAYER_CHAT_PAUSE_MINUTES
         reply = await player_say(rt.info, text, game_time, location)
@@ -956,8 +1009,12 @@ class WorldEngine:
             self._planning = False
 
     def start(self) -> None:
-        # 从 residents 表加载居民（含已持久化的当日计划）
+        # 从 residents 表加载居民（含已持久化的当日计划）。seed 里的坐标可能
+        # 是换图前的旧像素值（v3 换图时 v2 坐标会落在建筑上）——统一投射到
+        # 最近可走格；有存档时 import_state 稍后会用存档坐标再覆盖一次
+        spawn_px = (to_pixel_center(SPAWN_COL), to_pixel_center(SPAWN_ROW))
         for i, r in enumerate(load_residents()):
+            r.x, r.y = _sanitize_xy(r.x, r.y, spawn_px)
             self.residents[r.id] = ResidentRuntime(r, index=i)
         logger.info("loaded %d residents", len(self.residents))
         # 读档：世界从上次离开的地方继续（无档则新世界）——planned_day/

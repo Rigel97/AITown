@@ -37,16 +37,19 @@ def _resident(rid: str, name: str) -> Resident:
 
 
 def _snapshot(day: int = 3, minutes: float = 600.0) -> dict:
-    """一份合法快照（version/clock/player/residents 齐全）。"""
+    """一份合法快照（version/clock/player/residents 齐全）。
+
+    坐标取 v3 地图主街上的可走像素（tile (50,24)/(54,24)）：import_state
+    会对不可走坐标做最近投射，用可走值才能断言"往返不变"。"""
     return {
         "version": SAVE_VERSION,
         "clock": {"day": day, "minutes": minutes},
-        "player": {"x": 100, "y": 200},
+        "player": {"x": 1616, "y": 784},
         "residents": [
             {
                 "id": "a",
-                "x": 300,
-                "y": 400,
+                "x": 1744,
+                "y": 784,
                 "planned_day": 3,
                 "reflected_day": 2,
                 "current_location": "面包店",
@@ -112,8 +115,8 @@ def test_export_import_roundtrip() -> None:
     rb = ResidentRuntime(_resident("b", "乙"))
     eng.residents.update(a=ra, b=rb)
     eng.clock.day, eng.clock.minutes = 7, 930.0
-    eng.player = {"x": 752, "y": 208}
-    ra.info.x, ra.info.y = 300, 400
+    eng.player = {"x": 1616, "y": 784}
+    ra.info.x, ra.info.y = 1744, 784
     ra.planned_day, ra.reflected_day = 7, 6
     ra.current_location, ra.current_action = "面包店", "揉面"
     ra.path = [(1, 1)]
@@ -127,9 +130,9 @@ def test_export_import_roundtrip() -> None:
     )
     eng2.import_state(state)
     assert eng2.clock.label() == "day7-15:30"
-    assert eng2.player == {"x": 752, "y": 208}
+    assert eng2.player == {"x": 1616, "y": 784}
     rt = eng2.residents["a"]
-    assert (rt.info.x, rt.info.y) == (300, 400)
+    assert (rt.info.x, rt.info.y) == (1744, 784)
     assert rt.planned_day == 7 and rt.reflected_day == 6
     assert rt.current_location == "面包店" and rt.current_action == "揉面"
     assert rt.path == []  # 旧寻路路径作废，下一拍重算
@@ -146,7 +149,7 @@ def test_import_skips_unknown_residents() -> None:
     state["residents"].append({"id": "ghost", "x": 1, "y": 2})
     eng.import_state(state)
     assert "ghost" not in eng.residents
-    assert (ra.info.x, ra.info.y) == (300, 400)
+    assert (ra.info.x, ra.info.y) == (1744, 784)
 
 
 # ---------- 启动读档 ----------
@@ -158,7 +161,7 @@ def test_load_from_save_restores(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(we, "load_world", lambda *args, **kwargs: _snapshot())
     assert eng._load_from_save() is True
     assert eng.clock.label() == "day3-10:00"
-    assert eng.player == {"x": 100, "y": 200}
+    assert eng.player == {"x": 1616, "y": 784}
     assert eng.residents["a"].planned_day == 3  # 重启不重烧当日计划
 
 

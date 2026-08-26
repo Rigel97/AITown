@@ -1,15 +1,18 @@
-// 世界静态数据：角色精灵表布局、地图 JSON v2 类型、道具足迹几何。
+// 世界静态数据：角色精灵表布局、地图 JSON v3 类型、阻挡网格几何。
 //
-// 2026-08-25 视觉换装（v2 素材，LimeZu Modern Exteriors 系）：
-// - 角色表 folk2.png（1792×256）：8 角色 × 4 方向行 × 7 帧（1 idle + 6 walk），
-//   帧 32×64（角色 1 格宽 × 2 格高）。行序 down/left/right/up。
-//   帧布局来源：Premade_Character 表（idle 行 y=64 / walk 行 y=128，
-//   方向列 right@0-5/up@6-11/left@12-17/down@18-23，经肤色像素三重验证），
-//   由 /tmp 工具链拼合，角色顺序 = CHARACTER_INDEX 值序。
-// - 地图 v2：建筑/树木是整 Sprite（props）而非瓦片拼墙——角色可以走到
-//   树冠/屋顶"后面"（depth=y 排序），阻挡走预计算足迹（与服务端同源）。
-// - 地图数据唯一源头：client/scripts/build_map.py → town_map.json，
-//   前端渲染与服务端寻路共读。
+// 2026-08-26 地图切 v3（the_ville 裁剪版，见 client/scripts/the_ville_src/）：
+// - town_map_v3.json 同时是「Tiled 标准地图」（Phaser load.tilemapTiledJSON
+//   原生解析多 tileset 归属 + gid 翻转标志）和「项目世界数据」（walkable/
+//   sectors/locations/出生点，后端共读）——一份文件两种角色，改地图 = 改
+//   转换脚本重跑，前后端自动同步。
+// - 10 个渲染层按数组顺序自下而上：前 8 层永远在角色之下，Foreground
+//   L1/L2（树冠/吧台等半透明前景遮挡）永远在角色之上——the_ville 是
+//   娃娃房式敞开室内（数据验证：窗口内无不透明屋顶层），没有可淡出的屋顶，
+//   “遮挡感”由前景层置顶实现（角色站在吧台/树冠后面被正确盖住）。
+// - 阻挡不用 tile 碰撞而用预计算 walkable 网格：服务端寻路已把网格作为
+//   唯一权威，前端把它按行合并成矩形静态体，物理与服务端永不打架。
+// - 角色继续用 folk2 精灵表（1792×256）：8 角色 × 4 方向行 × 7 帧
+//   （1 idle + 6 walk），帧 32×64。
 
 export const FOLK_SHEET = "assets/v2/folk2.png";
 export const FOLK_FRAME_W = 32;
@@ -43,47 +46,67 @@ export function idleFrame(charIndex: number, dir: Direction): number {
   return DIR_ROW[dir] * SHEET_COLS + charIndex * FRAMES_PER_CHAR;
 }
 
-// ── 地图 JSON v2 ─────────────────────────────────────────────────
+// ── 地图 JSON v3（the_ville 裁剪版，转换管线单一源头）────────────────────────────────────────────────
 
-/** 地图道具：col/row = 锚点格（足迹中列 × 底行）；bw/bh = 阻挡足迹（0 = 贴花） */
-export interface MapProp {
-  img: string;
-  col: number;
-  row: number;
-  bw: number;
-  bh: number;
+/** tileset 表项：firstgid 起 global id 连续段，columns 决定 gid→格的行列换算 */
+export interface VilleTileset {
+  name: string;
+  firstgid: number;
+  columns: number;
+  tilecount: number;
+  image: string;
 }
 
-export interface TownMapData {
+/** 渲染层：data 是行主序原始 gid（含 Tiled 翻转标志位，Phaser 原生解析） */
+export interface VilleLayer {
+  name: string;
+  type: "tilelayer";
+  width: number;
+  height: number;
+  data: number[];
+}
+
+/** town_map_v3.json 项目自有字段（Tiled 标准字段以外部分） */
+export interface VilleMapData {
   version: number;
   cols: number;
   rows: number;
   tileDim: number;
-  tileset: string;
-  tilesetCols: number;
-  /** 行主序图层，-1 = 空（bg0 地面 / bg1 地面贴花） */
-  bgLayers: number[][][];
-  objLayers: number[][][];
-  props: MapProp[];
+  tilesets: VilleTileset[];
+  layers: VilleLayer[];
+  /** 行主序可行走网格：walkable[row][col]，与服务端寻路同源 */
   walkable: boolean[][];
   playerSpawn: { col: number; row: number };
 }
 
-/** 道具阻挡足迹覆盖的格子范围（与 build_map.py 的推导同式：c0 = col - bw/2） */
-export function propFootprint(p: MapProp): {
-  c0: number;
-  r0: number;
-  c1: number;
-  r1: number;
-} | null {
-  if (p.bw <= 0 || p.bh <= 0) return null;
-  const c0 = p.col - Math.floor(p.bw / 2);
-  return { c0, r0: p.row - p.bh + 1, c1: c0 + p.bw - 1, r1: p.row };
+/** 渲染在角色之上的前景层（树冠/吧台等半透明遮挡） */
+export const FOREGROUND_LAYER_NAMES = new Set(["Foreground L1", "Foreground L2"]);
+
+/** 阻挡网格按行合并出的连续矩形（瓦片坐标，h 恒为 1——只做行内合并）。
+ * v2 用逐道具碰撞体，v3 改为整网格派生：2332 个阻挡格 → ~271 个矩形，
+ * 物理体数量减一个数量级且与服务端 walkable 严格一致。 */
+export interface BlockedRun {
+  col: number;
+  row: number;
+  w: number;
+  h: number;
 }
 
-/** 道具渲染/碰撞锚点像素（足迹中列、底行下缘） */
-export function propAnchorPx(p: MapProp, tileDim: number): { x: number; y: number } {
-  return { x: p.col * tileDim + tileDim / 2, y: (p.row + 1) * tileDim };
+export function blockedRuns(walkable: boolean[][]): BlockedRun[] {
+  const runs: BlockedRun[] = [];
+  for (let row = 0; row < walkable.length; row++) {
+    const cols = walkable[row]!;
+    let start = -1;
+    for (let col = 0; col <= cols.length; col++) {
+      const blocked = col < cols.length && !cols[col];
+      if (blocked && start < 0) start = col;
+      else if (!blocked && start >= 0) {
+        runs.push({ col: start, row, w: col - start, h: 1 });
+        start = -1;
+      }
+    }
+  }
+  return runs;
 }
 
 /**

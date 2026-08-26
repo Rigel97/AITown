@@ -34,7 +34,7 @@ RESIDENT = Resident(
     y=344,
 )
 
-VALID_JSON = '[{"time": "07:00", "location": "面包店", "action": "开门烤面包"}, {"time": "18:00", "location": "餐馆", "action": "去喝一杯"}]'
+VALID_JSON = '[{"time": "07:00", "location": "青梧咖啡", "action": "开门磨豆"}, {"time": "18:00", "location": "九号酒馆", "action": "去喝一杯"}]'
 
 
 def _fresh_db(tmp_path: Path) -> Path:
@@ -70,7 +70,7 @@ def test_prompt_contains_world_context(tmp_path: Path) -> None:
 
 def test_parse_plan_valid_json() -> None:
     plan = parse_plan(VALID_JSON)
-    assert plan[0] == PlanEntry("07:00", "面包店", "开门烤面包")
+    assert plan[0] == PlanEntry("07:00", "青梧咖啡", "开门磨豆")
     assert len(plan) == 2
 
 
@@ -83,13 +83,13 @@ def test_parse_plan_tolerates_surrounding_text() -> None:
 def test_parse_plan_garbage_falls_back_to_default() -> None:
     plan = parse_plan("我完全不知道该怎么做")
     assert len(plan) == 1
-    assert plan[0].location == "广场"  # 默认日程
+    assert plan[0].location == "主街"  # 默认日程
 
 
 def test_parse_plan_filters_illegal_locations() -> None:
     raw = '[{"time": "08:00", "location": "月球", "action": "看星星"}]'
     plan = parse_plan(raw)
-    assert plan[0].location == "广场"  # 非法地点被过滤后降级
+    assert plan[0].location == "主街"  # 非法地点被过滤后降级
 
 
 # ---------- 畸形时间防线（2026-08-21 深检：脏时间曾可炸死主循环） ----------
@@ -98,22 +98,22 @@ def test_parse_plan_filters_illegal_locations() -> None:
 def test_parse_plan_rejects_time_with_seconds() -> None:
     """Bug A：LLM 输出 "07:00:00"（带秒）——旧版照单全收入库，
     current_plan_entry 的时间解包直接抛 ValueError，主循环曾因此静默停摆。"""
-    raw = '[{"time": "07:00:00", "location": "广场", "action": "晨练"}]'
+    raw = '[{"time": "07:00:00", "location": "主街", "action": "晨练"}]'
     plan = parse_plan(raw)
-    assert plan[0].location == "广场"  # 降级默认日程
+    assert plan[0].location == "主街"  # 降级默认日程
 
 
 def test_parse_plan_rejects_non_numeric_time() -> None:
     for bad in ("7点", "早上", "", "25:00", "07:5", "12:60"):
         raw = json.dumps(
-            [{"time": bad, "location": "广场", "action": "x"}], ensure_ascii=False
+            [{"time": bad, "location": "主街", "action": "x"}], ensure_ascii=False
         )
-        assert parse_plan(raw)[0].location == "广场", bad
+        assert parse_plan(raw)[0].location == "主街", bad
 
 
 def test_parse_plan_normalizes_unpadded_hour() -> None:
     """合法但不规范的时间（"7:05"）规范化为 "07:05"，方便排序与时钟对齐。"""
-    raw = '[{"time": "7:05", "location": "面包店", "action": "开门"}]'
+    raw = '[{"time": "7:05", "location": "青梧咖啡", "action": "开门"}]'
     assert parse_plan(raw)[0].time == "07:05"
 
 
@@ -153,7 +153,7 @@ async def test_generate_daily_plan_end_to_end(
     plan = await generate_daily_plan(
         RESIDENT, day=1, game_time="day1-07:00", db_path=db
     )
-    assert plan[0].location == "面包店"
+    assert plan[0].location == "青梧咖啡"
 
     # daily_plan 已持久化
     residents = load_residents(db)
@@ -188,7 +188,7 @@ async def test_generate_daily_plan_llm_failure_degrades(
     plan = await generate_daily_plan(
         RESIDENT, day=1, game_time="day1-07:00", db_path=db
     )
-    assert plan[0].location == "广场"
+    assert plan[0].location == "主街"
 
 
 # ---------- Bug F：降级计划不得写记忆（known issue #47 在 planner 的复现） ----------
@@ -225,7 +225,7 @@ async def test_llm_timeout_writes_no_memory(
     plan = await generate_daily_plan(
         RESIDENT, day=1, game_time="day1-07:00", db_path=db
     )
-    assert plan[0].location == "广场"  # 降级日程生效
+    assert plan[0].location == "主街"  # 降级日程生效
     assert _count_memories(db) == 0  # 关键：没有记忆污染
     residents = load_residents(db)
     assert residents[0].daily_plan is not None  # 持久化照常
@@ -248,5 +248,5 @@ async def test_unparseable_output_writes_no_memory(
     plan = await generate_daily_plan(
         RESIDENT, day=1, game_time="day1-07:00", db_path=db
     )
-    assert plan[0].location == "广场"
+    assert plan[0].location == "主街"
     assert _count_memories(db) == 0
