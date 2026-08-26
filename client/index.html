@@ -3,6 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#1a2f0e" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏡</text></svg>"
+    />
     <title>AI 小镇</title>
   </head>
   <body>
@@ -10,7 +15,7 @@
       <div id="game"></div>
       <!-- HUD：文字 UI 用 DOM（清晰），像素世界用 Canvas -->
       <div id="hud">
-        <button id="event-log-toggle" type="button">📜 小镇播报</button>
+        <button id="event-log-toggle" class="hud-btn" type="button" aria-expanded="false" aria-controls="event-log">📜 小镇播报</button>
         <div id="event-log" class="hidden"></div>
         <div id="hint" class="hidden"></div>
         <!-- 探出式一体化对话卡：立绘骑在卡片左上、头部探出卡片顶缘 -->
@@ -28,7 +33,7 @@
                 placeholder="说点什么…（Enter 发送，Esc 关闭）"
                 autocomplete="off"
               />
-              <button id="chat-history-btn" type="button" title="对话记录（H）">📜</button>
+              <button id="chat-history-btn" class="hud-btn" type="button" title="对话记录（H）">📜</button>
             </div>
           </div>
         </div>

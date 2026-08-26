@@ -5,14 +5,18 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 -->
 
 ## 🏗️ Active Phase & Goal
-**Current Task:** 视觉大改版 v2 完成并浏览器全闭环验证 ✅（40×40 温馨小镇 + folk2 角色 + 昼夜光照）
+**Current Task:** V3 Phase C+D 完成并浏览器全闭环验证 ✅；2026-08-26 前端 UI 美化完成（相框舞台/暗角/毛玻璃面板/动效，纯表现层零逻辑改动，lint+23 测+浏览器实测全过）
 **Next Steps:**
-1. Phase 4（Security pass → 朋友演示 → 7 天北极星验证 2026-09-28 前）
-2. 观察项：M2.7 单次延迟波动（3–16s 都有，与居民对话并发挤占有关；有 4.5s 超时+托词兑底，不影响正确性，但 <5s 目标在波动面前只能算"多数时候达标"）
-3. 可选视觉项：秋色橡树混入绿色变体（夏日层次，留用户拍板）
+1. V3 居民落库（seed.py 按新叙事体重写七人 prompt_prefix + 重估成本——需用户拍板：改人设会一次性重置 Prompt 缓存；立绘重新生成，素材用户后续提供，旧图占位不阻塞）
+2. Phase 4（Security pass → 朋友演示 → 7 天北极星验证 2026-09-28 前）
+3. 观察项：M2.7 单次延迟波动（3–16s 都有，与居民对话并发挤占有关；有 4.5s 超时+托词兑底，不影响正确性，但 <5s 目标在波动面前只能算"多数时候达标"）
 
 ## 📂 Architectural Decisions
 *(Log specific choices made during the build here so future agents respect them)*
+- 2026-08-26 — **前端美化（纯 CSS 表现层）**：主题色收敛到 `:root` CSS 变量（暖纸/深棕单一源头）；舞台 `#stage` 圆角+多层 box-shadow 相框化，`#hud::after` 内阴影暗角（`#hud` 加 `isolation:isolate` 保证只压画布不压面板）；事件日志/对话历史毛玻璃+自绘滚动条；`.hud-btn` 统一 hover/active/focus-visible；播报按钮展开态反色（`hud.ts` 同步 `.active`+aria-expanded）；空日志 CSS 占位「小镇还很安静……」；`prefers-reduced-motion` 关装饰动画。约定：`chat-layer-out` 160ms 与 `CLOSE_ANIM_MS` 锁死，改 CSS 时长必须同步改 JS。
+- 2026-08-26 — **家具交互点自动命名（V3 Phase D）**：勘察发现 CN 版 maze.json 的 address 第 3 层就是 game_object 名（窗口内 239 个交互格 100% 覆盖，Phase B 时误判为"无物体级地址"）——105 个交互簇按多数派物体名自动命名 + OBJECT_RENAME 翻译到 V3 世界观（去旧世界专名/口语化/贴合人设：麦克风→驻唱台），浴室三件套混合簇统一"淋浴区"；每簇 BFS 派生使用点（最近可走格，确定性）。全部在转换脚本单一源头，重跑即得。
+- 2026-08-26 — **细粒度感知三层接线（零 LLM 成本）**：①站位引导——engine._spot_for 按 action 文本匹配家具（精确物体名 > ACTION_OBJECT_HINTS 关键词桥），把居民领到家具使用点而非房间正中央，使用点被占（≤1 格）回退普通站位点；②near_object 广播——public() 在站定时派生身边 2 格内最相关家具（排序键 -matched 优先于距离：被引导到书架旁的人不会报旁边的冰箱），走路中不报（防"在冰箱旁赶路"），sector 与当前地点一致才报（防贴门跨房间缝合）；③对话感知——单聊 prompt 的地点从"小镇图书馆"细化为"小镇图书馆的阅读桌旁"，编年史同步记录。world/objects.py 新模块收口两个查询（preferred_block/nearest_block），派生量不入存档（重算零成本）。
+- 2026-08-26 — **为什么关键词桥宁缺毋滥**：LLM 的 action 常自带物体名（"整理书架"走精确匹配），关键词桥只收高频活动（看书/排练/备料…约 20 词条连续子串匹配）——错配比缺失更伤感知可信度（"在马桶旁看书"一次就把沉浸感砸了）。「看一下午书」不含连续子串"看书"不会命中，这是接受的取舍（宁可不引导也不乱引导）。
 - 2026-08-14 — 前端选 Phaser v4：瓦片地图/相机/输入/碰撞开箱即用，1 个月 MVP 少造轮子；Smallville 原作者验证过"Python 后端 + Phaser 前端"路线。a16z ai-town 只读不 fork。
 - 2026-08-14 — 后端选 FastAPI (Python)：项目灵魂（智能体循环）在后端，用开发者最熟的语言写；接口契约用 WebSocket 消息类型显式定义。
 - 2026-08-14 — LLM 选 MiniMax API（用户指定）：轻量层 M2.7（对话/计划/感知判断）+ 旗舰层 M3（每日反思），已核实支持 Prompt 缓存（缓存读取价 = 输入价 1/5）、兼容 OpenAI SDK、无 embedding 接口、无峰谷计价。调用统一走 `llm/client.py` 的 `chat(prompt, tier)`，换 provider 只改适配文件。
@@ -44,10 +48,13 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 - 2026-08-22 — **模型选型定案（用户拍板）**：chat 层删 MINIMAX_CHAT_MODEL 回退 M2.7——highspeed 实验结论"不再使用"（实测单次 8.6–29.9s 比 M2.7 的 2.7–3.8s 还慢且单价双倍）。三层定型：杂活 M2.7 / 对话 M2.7 / 反思 M3（M3 一天仅 7 次 ~¥0.04，占比 <5%，"贵模型干抽象活"的正确用法）。回退后总成本预估 ~¥0.6/游戏日。验证：日志 tier=chat model=MiniMax-M2.7，对话正常人设贴合。
 - 2026-08-25 — **探出式一体化对话卡（用户多轮拍板）**：替代旧"日志流对话面板"——大立绘骑卡片左侧、底边站在卡片底、头部探出卡片顶 ~150px；名牌 = 居民专属色小标签探出卡片顶缘（`ui/speakerStyle.ts` 纯数据映射：7 居民互不撞色 + 玩家中性灰绿）；台词区 + 输入行在立绘右侧。关键机制：①群聊多句走**展示队列逐句播放**（每句 dwell 1600ms、立绘随说话人逐句切换、玩家插话清队立即显示）——注意队列空≠空闲（上一句正 dwell 时 length 会回到 1），节拍判断必须用"有无待播 timer"而不是 queue.length；②Esc 分层（先关记录浮层再关对话卡）；③"正在想……"在台词区呼吸显示，回复丢失恢复上一句不留白卡；④立绘切换先淡出 110ms 再换 src 防闪白，7 张全量预载；⑤记录浮层打开时立绘退为 0.25 透明度避免文字糊立绘上。H 键实际很难触发（输入框聚焦时打字优先），开记录主路径 = 📜 按钮。
 - 2026-08-25 — **立绘资产管线（7 张 1728×2304 生成图 → 抠图入库）**：白底 5 张用确定性算法（Sobel 梯度 <10 的平滑区连通域 + 只保留触边框连通域为背景 + 白色安全网 + 1px 腐蚀，原理：像素画背景平滑、角色有描边）；林师傅/苏晚是**带实物的绘制背景**（面包店货架/书架），确定性算法必败——最终用手动下载的 u2net.onnx + onnxruntime 直推（320×320 归一化输入 → 显著性掩码）。**rembg CLI 在本机会卡死**（自带下载器挂起，模型手动 curl 到 ~/.u2net/ 也救不了它的启动流程），绕开它自己写 20 行推理即可。统一后处理：不透明 bbox 裁剪 + 3% 边距 + 高度归一 853px（7 张头部位置一致，底边对齐 CSS 里卡片底）。输出在 `client/public/assets/portraits/{id}.png`（文件名=居民 id，零映射表；忘放图自动优雅降级隐藏）。项目根目录的中文 PNG 是用户的原始母版，勿删。
+- 2026-08-25 — **V3 七居民人设拍板（用户确认）**：`specs/v3_residents_draft.md` 斯坦福叙事体人设获批，三人改名——陈九→**慕容瑾**（酒吧老板）、高歌→**高新**（驻唱）、周画→**周星星**（画家）。后续拍板（同日全部落定）：店名"九号酒馆"**保留不变**（不随老板改名）；立绘**全部重新生成**（素材用户后续提供，落地期间旧图占位不阻塞）；**保留**"李算暗恋高新"暗线。注意：V3 落库时 seed.py 的 prompt_prefix 需按新叙事体重写，会重置 Prompt 缓存（改人设=重估成本）。
 - 2026-08-25 — **视觉大改版 v2 地图（用户"太粗糙"反馈 → 高质量免费素材包 + 40×40 紧凑布局，双拍板）**：地图从 mage3 50×50 换为生成式 40×40 温馨小镇（Serene Village 系瓦片 + props），管线 = `client/scripts/build_map.py` 单一源头（地形 + 建筑摆位 + 树边框 + 贴花 → 预计算 walkable 网格 → town_map.json 前后端共读；改布局 = 改脚本重跑 + 同步 `server/world/locations.py` 站位点）。角色换 folk2 大表（32×64 帧：1 idle + 6 walk 四方向；20 选 7 按**立绘主色 × 服装色直方图匹配** + 身高修正——小豆子选矮的）。前端 TownScene 配套：props 分层渲染 + 建筑静态物理体（footprint 网格）+ 角色椭圆阴影 + **昼夜光照 LIGHT_SCHEDULE**（时间驱动的 ColorMatrix 滤镜链，白天提亮暖色/夜晚压暗偏蓝，实测凌晨→白天灰度均值 100→147 实时渐变）。服务端 `mapdata.nearest_walkable`：换图后旧存档坐标投射到最近可走格，居民不卡死。**为什么生成式而非手绘整图**：40×40 布局调整（挪一座楼/一条路）只改几行坐标重跑脚本，walkable/站位/寻路测试全部自动重算——手绘整图每次改动要人肉重标阻挡层。观察项：oak 系素材全是秋色红橙（边框树墙在镜头贴边时呈全高红带，像素分析一度误判为 bug），若想要夏日绿色层次需混入绿松变体，留用户拍板。
 
 ## 🐛 Known Issues & Quirks
 *(Log current bugs or weird workarounds here)*
+- **v2 居民暂住 v3 地图（过渡态）**：DB 还是 v2 七人（林师傅/苏晚/阿茉/老周/红姐/小豆子/老宋），他们的计划描述 v2 地点（"老宋的杂货店"）但白名单强制 v3 地名——出现"红姐在吴文的套间备料（衣柜旁）"这类住址错位。V3 新人设落库（seed.py 重写）后自然清退，属预期过渡态不影响机制验证。
+- **房间家具与主人不完全对应（地图原状）**：the_ville 原作者的家具有局错位透到 V3：郑巧（木匠）房里有电脑桌、李算（程序员）房里有吉他与画架、黑板在空套间不在吴文房。世界观解释：房间家具是"原来就有的"。若要精准对应需手改 maze 数据，性价比低暂不动。
 - **GitHub 工作流注意**（2026-08-19 建仓）：仓库 github.com/Rigel97/AITown（公开）；推送凭证用 `gh auth`（设备码登录已完成，`gh auth setup-git` 可让 git push 永久免密）；提交身份临时用 `-c user.name/user.email` 注入（Rigel97 + noreply 邮箱），没改全局 git 配置；后续改动记得 commit+push。
 - 成本达标风险：按已核实单价，单次游戏日 ≤ ¥2.1 目标需 ~70%+ Prompt 缓存命中率，存在超标风险 → W1 实测命中率，W4 校准，必要时下调调用量假设或上调预算。
 - Phaser v4 较新：AI 可能给出 v3 语法的答案 → 提问时明确"Phaser v4"，收到代码先核对版本 API。
@@ -76,6 +83,10 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 - **人设前缀 ≠ 世界观**（2026-08-17 用户实测：老宋编造不存在的镇民要给人修椅子）：prompt_prefix 只写"我是谁、我认识谁"，没写"镇上只有这些人" → LLM 自由发挥。修复：`agents/resident.py` 新增 `world_context()`——从 DB 构建完整镇民名单+场所清单+禁止编造约束，逐字固定插在对话 prompt 的人设前缀之后（缓存友好）；`test_dialogue.py` 锁定名单完整性/逐字稳定性/prompt 组装顺序。实测修复后老宋回复贴人设且不编人。
 
 ## 📜 Completed Phases
+- [x] V3 Phase C：前端切 v3 地图渲染（2026-08-26：TownScene 重写——town_map_v3.json 双角色（Tiled 标准地图 + 项目世界数据），load.tilemapTiledJSON 原生解析 10 层 × 13 tileset（gid 归属/翻转零二次映射）；层序即遮挡语言：前 8 层负 depth、角色 depth=y、Foreground L1/L2 固定 9000（娃娃房敞开室内无屋顶淡出，遮挡由前景层置顶）；阻挡 walkable 网格按行合并 2332 阻挡格→271 矩形静态体；后端 locations.py 改读地图 locations 字段（站位点零手抄）；engine start 时坐标净化防换图卡墙。后端 132 测 + 前端 19 测全绿，浏览器实测渲染/碰撞/对话/昼夜全闭环）
+- [x] V3 Phase D：家具交互点命名与细粒度感知（2026-08-26：发现 maze.json address 第 3 层即 game_object 名（100% 覆盖，Phase B 误判纠正）→ 105 簇自动命名（29 种物体名，OBJECT_RENAME 翻译 + 浴室混合簇→淋浴区）+ BFS 使用点；后端 world/objects.py 新模块（preferred_block 站位引导 / nearest_block 感知查询，均确定性）；engine 三处接线：站位引导（action 匹配家具优先站家具旁，被占回退）、near_object 广播（站定时±2 格最相关家具，排序键 -matched 优先于距离）、单聊 prompt 地点细化（"小镇图书馆的书架旁"，编年史同步）；前端 doingText 纯函数拼 hint（去重：action 已含物体名不重复报）。后端 145 测（+13）+ ruff；前端 tsc/eslint 零违规 + vitest 23 测（+4）。浏览器实测：老周@咖啡柜台（关键词桥）、老宋@阅读桌（被动就近）、hint"（在阅读桌旁，正在陪苏晚待一会儿）"、对话问"你在哪"→"图书馆呢。"、编年史 location=小镇图书馆的阅读桌旁、事件流"小豆子来到了合租公寓厨房，在冰箱旁"）
+- [x] V3 Phase A：新居民设计拍板（2026-08-25：`specs/v3_residents_draft.md`，斯坦福叙事体 7 人——沈青梧/慕容瑾/高新/周星星/李算/吴文/郑巧，昼夜双聚集点作息；改名/店名保留/立绘重新生成/暗线保留全部拍板）
+- [x] V3 Phase B：the_ville 素材落地 + 裁剪转换管线（2026-08-25：`client/scripts/the_ville_src/convert_ville_map.py` 单一源头，maze.json+tilemap.json（x-glacier/GenerativeAgentsCN，Apache-2.0 已核验，LICENSE+NOTICE 入 `client/public/assets/ville/`）→ `client/public/assets/town_map_v3.json`。裁剪窗口经探测修正为 **x[14,135]×y[6,40]**（122×35，x=16 会切掉两间卧室）；13 张 tileset PNG 下载；10 渲染层 gid 原值保留（含翻转 flag）+ tilesets 表带 firstgid，前端按标准 Tiled 规则渲染；walkable 用 maze collision 权威值 + **孤岛封闭**（出生点 BFS，封掉 1458 格裁剪边缘断开的装饰区，主连通区 1938/1938=100%）；28 个 sector 连通分量切分后唯一命名（"主人房"实际 5 个分量：沈青梧=咖啡馆正楼上/慕容瑾=酒吧正楼上/郑巧=两店之间/空套间/吴文=图书馆旁；浴室就近归属）；105 个家具交互簇（Object Interaction Blocks，待 Phase D 命名）；出生点=(62,23) 主街（maze 的 Spawning Blocks 是原居民卧室点，不适合玩家）；render_preview.py 出 preview.png 目视校验通过（娃娃屋式室内可见，符合 the_ville 风格）。**产物是 town_map_v3.json 独立文件，现役 town_map.json 未动，游戏不受影响**；Phase C 才切换前端渲染）
 - [x] Initial scaffold（2026-08-14：client/ Vite+Phaser 4.2.1，server/ FastAPI+uv 虚拟环境；`start.sh` 一键启动；3 个 WebSocket 集成测试全绿）
 - [x] Database schema creation（2026-08-14：`residents` / `memories` / `saves` 三表已建入 `server/db/aitown.db`）
 - [x] MiniMax 首次调用验证（2026-08-14 实测：M2.7 延迟 2.73s/3.81s < 5s 目标 ✅；**Prompt 缓存确认命中** `cached_tokens=14`（测试 prompt 仅 54 token，真人设前缀 200–400 token 后才能看真实命中率）；OpenAI SDK 兼容 ✅）

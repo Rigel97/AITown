@@ -88,7 +88,10 @@ export class Hud {
     });
     this.historyBtn.addEventListener("click", () => this.toggleHistory());
     this.eventToggle.addEventListener("click", () => {
-      this.eventLog.classList.toggle("hidden");
+      // toggle 返回"hidden 是否仍在"（true=加了 hidden 即已收起）
+      const open = !this.eventLog.classList.toggle("hidden");
+      this.eventToggle.classList.toggle("active", open);
+      this.eventToggle.setAttribute("aria-expanded", String(open));
     });
     // 立绘加载失败（如新增居民忘放图）→ 隐藏占位破图；成功则恢复
     this.portraitImg.addEventListener("error", () => this.portraitImg.classList.add("no-art"));

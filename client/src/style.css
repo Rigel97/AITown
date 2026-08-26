@@ -1,46 +1,128 @@
+/* ===== 主题变量 =====
+   暖纸 + 深棕的"星露谷"色系单一来源：改主题只动这里。 */
+:root {
+  --paper: #fff8e7; /* 面板暖纸底 */
+  --paper-bright: #fffdf4; /* 亮部（渐变上端） */
+  --paper-dim: #f3e8cf; /* 暗部（hover/渐变下端） */
+  --ink: #3d2b1f; /* 主墨色（深棕） */
+  --ink-soft: #6b4f3a; /* 次级文字 */
+  --accent: #8a6d3b; /* 强调（聚焦环/时间戳） */
+  --line: #d8c9a8; /* 分隔虚线 */
+  --shadow-deep: rgba(20, 14, 8, 0.45); /* 大投影 */
+}
+
 body {
   margin: 0;
   display: flex;
   justify-content: center;
   align-items: center;
   min-height: 100vh;
-  background: #1a2f0e;
-  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+  padding: 0 16px;
+  box-sizing: border-box;
+  /* 深林暮色：中心微亮的绿 → 边缘近黑，底部一点暖光托住画布 */
+  background:
+    radial-gradient(1200px 500px at 50% 118%, rgba(138, 109, 59, 0.18), transparent 60%),
+    radial-gradient(1100px 720px at 50% 40%, #24401a 0%, #1a2f0e 55%, #101c08 100%);
+  background-color: #1a2f0e; /* 极端小窗口下的兜底色 */
+  background-attachment: fixed;
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 }
 
-/* 舞台：canvas + HUD 叠放 */
+::selection {
+  background: #f3d9a4;
+  color: var(--ink);
+}
+
+/* 舞台：canvas + HUD 叠放。圆角相框 + 环形框边 + 大投影，
+   让 960×640 的游戏像被"装裱"在页面中央。 */
 #stage {
   position: relative;
   width: 960px;
   height: 640px;
+  margin: 20px 0;
+  border-radius: 14px;
+  overflow: hidden; /* 裁掉画布直角 */
+  box-shadow:
+    0 0 0 1px rgba(255, 240, 200, 0.1),
+    /* 相框高光描边 */
+    0 0 0 7px rgba(24, 17, 10, 0.5),
+    /* "画框"木边 */
+    0 0 0 8px rgba(255, 240, 200, 0.06),
+    0 30px 70px var(--shadow-deep),
+    0 10px 24px rgba(0, 0, 0, 0.35);
 }
 
 #hud {
   position: absolute;
   inset: 0;
   pointer-events: none; /* 默认不挡游戏操作，具体控件单独开 */
+  isolation: isolate; /* 让下面的暗角层只压画布、不压面板 */
+}
+
+/* 沉浸暗角：极淡的内阴影罩住画布四角，画面更"有空气感"。
+   z-index:-1 → 位于所有 HUD 面板之下、画布之上。 */
+#hud::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  box-shadow: inset 0 0 70px rgba(16, 12, 6, 0.28);
 }
 
 .hidden {
   display: none !important;
 }
 
-/* 小镇播报按钮（右上角） */
+/* ===== 通用 HUD 按钮 ===== */
+.hud-btn {
+  pointer-events: auto;
+  padding: 6px 12px;
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(20, 14, 8, 0.25);
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.hud-btn:hover {
+  background: var(--paper-bright);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(20, 14, 8, 0.3);
+}
+
+.hud-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 3px rgba(20, 14, 8, 0.3);
+}
+
+.hud-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(138, 109, 59, 0.35),
+    0 2px 6px rgba(20, 14, 8, 0.25);
+}
+
+/* 小镇播报按钮（右上角）：展开时"点亮" */
 #event-log-toggle {
   position: absolute;
   top: 10px;
   right: 10px;
-  pointer-events: auto;
-  padding: 6px 12px;
-  border: 2px solid #3d2b1f;
-  border-radius: 8px;
-  background: #fff8e7;
-  color: #3d2b1f;
-  font-size: 14px;
-  cursor: pointer;
 }
 
-/* 事件日志面板（右侧，可折叠） */
+#event-log-toggle.active {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* ===== 事件日志面板（右侧，可折叠） ===== */
 #event-log {
   position: absolute;
   top: 48px;
@@ -49,22 +131,62 @@ body {
   max-height: 320px;
   overflow-y: auto;
   pointer-events: auto;
-  background: rgba(255, 248, 231, 0.95);
-  border: 2px solid #3d2b1f;
-  border-radius: 8px;
-  padding: 8px;
+  background: rgba(255, 248, 231, 0.92);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  padding: 8px 10px;
   font-size: 13px;
-  color: #3d2b1f;
+  color: var(--ink);
+  box-shadow: 0 8px 24px rgba(20, 14, 8, 0.35);
+  animation: panel-in 180ms ease-out;
+}
+
+/* 空日志的占位语：小镇刚醒来，还没有故事 */
+#event-log:empty::before {
+  content: "小镇还很安静……";
+  display: block;
+  padding: 6px 2px;
+  color: var(--ink-soft);
+  opacity: 0.7;
 }
 
 #event-log .event {
   padding: 3px 0;
-  border-bottom: 1px dashed #d8c9a8;
+  border-bottom: 1px dashed var(--line);
+  animation: event-in 260ms ease-out;
 }
 
 #event-log .event .time {
-  color: #8a6d3b;
+  color: var(--accent);
   margin-right: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 暖色细滚动条（Chrome/Safari 自绘 + Firefox 原生瘦身） */
+#event-log,
+#chat-history {
+  scrollbar-width: thin;
+  scrollbar-color: #cbb98f transparent;
+}
+
+#event-log::-webkit-scrollbar,
+#chat-history::-webkit-scrollbar {
+  width: 8px;
+}
+
+#event-log::-webkit-scrollbar-thumb,
+#chat-history::-webkit-scrollbar-thumb {
+  background: #cbb98f;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+#event-log::-webkit-scrollbar-track,
+#chat-history::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* 走近提示 */
@@ -73,11 +195,17 @@ body {
   bottom: 130px;
   left: 50%;
   transform: translateX(-50%);
-  padding: 4px 10px;
-  background: rgba(61, 43, 31, 0.85);
-  color: #fff8e7;
-  border-radius: 6px;
+  padding: 5px 14px;
+  background: rgba(45, 30, 20, 0.88);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 232, 190, 0.22);
+  color: var(--paper);
+  border-radius: 999px;
   font-size: 13px;
+  letter-spacing: 0.5px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  animation: hint-in 180ms ease-out;
 }
 
 /* ===== 探出式一体化对话卡 =====
@@ -98,7 +226,7 @@ body {
 }
 
 #chat-layer.closing {
-  animation: chat-layer-out 160ms ease-in forwards;
+  animation: chat-layer-out 160ms ease-in forwards; /* 时长与 CLOSE_ANIM_MS 一致，勿改 */
 }
 
 #chat-card {
@@ -107,9 +235,13 @@ body {
   box-sizing: border-box;
   min-height: 150px;
   padding: 14px 16px 12px 270px; /* 左侧 270px 让位给立绘 */
-  background: rgba(255, 248, 231, 0.95);
-  border: 2px solid #3d2b1f;
+  background: linear-gradient(180deg, var(--paper-bright) 0%, #fdf3da 70%, var(--paper) 100%);
+  border: 2px solid var(--ink);
   border-radius: 14px;
+  box-shadow:
+    0 12px 32px var(--shadow-deep),
+    0 3px 8px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.65);
 }
 
 #portrait {
@@ -146,23 +278,24 @@ body {
   top: -14px; /* 名牌探出卡片顶缘，像标签页 */
   left: 270px;
   padding: 3px 14px;
-  border: 2px solid #3d2b1f;
+  border: 2px solid var(--ink);
   border-radius: 12px;
   background: #6e6e6e; /* JS 按说话人专属色覆盖 */
-  color: #fff8e7;
+  color: var(--paper);
   font-size: 14px;
   font-weight: bold;
+  box-shadow: 0 3px 8px rgba(20, 14, 8, 0.35);
 }
 
 #chat-text {
   min-height: 62px; /* 两行台词的空间，卡片高度平时稳定 */
   font-size: 17px;
   line-height: 1.7;
-  color: #3d2b1f;
+  color: var(--ink);
   white-space: pre-wrap; /* 群聊多行按说话人分行 */
 }
 
-/* “正在想……”呼吸动画：治愈系动效要柔，不闪跳 */
+/* "正在想……"呼吸动画：治愈系动效要柔，不闪跳 */
 #chat-text.thinking {
   animation: chat-breathe 1.2s ease-in-out infinite;
 }
@@ -177,26 +310,37 @@ body {
   flex: 1;
   min-width: 0;
   box-sizing: border-box;
-  padding: 8px;
+  padding: 8px 10px;
   font-size: 14px;
-  border: 2px solid #3d2b1f;
-  border-radius: 6px;
-  background: #fff;
+  font-family: inherit;
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  background: var(--paper-bright);
   outline: none;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+#chat-input::placeholder {
+  color: #b3a184;
+}
+
+#chat-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(138, 109, 59, 0.22);
 }
 
 #chat-history-btn {
   flex: none;
   width: 40px;
-  border: 2px solid #3d2b1f;
-  border-radius: 6px;
-  background: #fff8e7;
+  padding: 6px 0;
   font-size: 16px;
-  cursor: pointer;
 }
 
 #chat-history-btn:hover {
-  background: #f3e8cf;
+  background: var(--paper-bright);
 }
 
 /* 对话记录：卡片上方浮层，压过立绘（z-index），半透明暖底 */
@@ -210,12 +354,16 @@ body {
   pointer-events: auto;
   z-index: 2;
   box-sizing: border-box;
-  padding: 8px 10px;
-  background: rgba(255, 248, 231, 0.96);
-  border: 2px solid #3d2b1f;
+  padding: 10px 12px;
+  background: rgba(255, 248, 231, 0.92);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 2px solid var(--ink);
   border-radius: 10px;
   font-size: 13px;
-  color: #3d2b1f;
+  color: var(--ink);
+  box-shadow: 0 -8px 24px rgba(20, 14, 8, 0.3);
+  animation: panel-in 180ms ease-out;
 }
 
 #chat-history .line {
@@ -226,6 +374,8 @@ body {
   font-weight: bold;
   margin-right: 6px;
 }
+
+/* ===== 动画 ===== */
 
 @keyframes chat-layer-in {
   from {
@@ -267,5 +417,63 @@ body {
   }
   50% {
     opacity: 1;
+  }
+}
+
+/* 面板展开：轻微下落 + 淡入 */
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 新事件：从顶部滑入（prepend 语义），260ms 不抢戏 */
+@keyframes event-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 走近提示：淡入 + 微微上浮 */
+@keyframes hint-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* 无障碍：系统开了"减弱动态效果"就关掉装饰动画 */
+@media (prefers-reduced-motion: reduce) {
+  .hud-btn,
+  #chat-input {
+    transition: none;
+  }
+
+  #event-log,
+  #chat-history,
+  #hint,
+  #event-log .event,
+  #chat-layer,
+  #chat-layer.closing,
+  #portrait {
+    animation-duration: 1ms;
+  }
+
+  #chat-text.thinking {
+    animation-duration: 2s; /* 呼吸放缓而非全灭，保留"在想"的状态感 */
   }
 }
