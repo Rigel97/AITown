@@ -5,7 +5,7 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 -->
 
 ## 🏗️ Active Phase & Goal
-**Current Task:** V3 Phase C+D 完成并浏览器全闭环验证 ✅；2026-08-26 前端 UI 美化完成（相框舞台/暗角/毛玻璃面板/动效，纯表现层零逻辑改动，lint+23 测+浏览器实测全过）
+**Current Task:** 2026-08-28 前端显示优化四项全部完成（画布跟随窗口 RESIZE / 加载进度提示 / 状态栏时间人话化 / interiors_pt3 垫图消除警告，浏览器实测全闭环）；此前同日修复"全屏只剩背景绿"渲染事故 ✅
 **Next Steps:**
 1. V3 居民落库（seed.py 按新叙事体重写七人 prompt_prefix + 重估成本——需用户拍板：改人设会一次性重置 Prompt 缓存；立绘重新生成，素材用户后续提供，旧图占位不阻塞）
 2. Phase 4（Security pass → 朋友演示 → 7 天北极星验证 2026-09-28 前）
@@ -13,6 +13,8 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 
 ## 📂 Architectural Decisions
 *(Log specific choices made during the build here so future agents respect them)*
+- 2026-08-28 — **画布跟随窗口（RESIZE）而非固定 960×640**：1920×1080 下固定画布只占 29% 屏，改 `scale: { mode: RESIZE, width/height: '100%' }`，相机 zoom 不变——同屏看到的像素世界随窗口变大（1920 下可见 960×540 vs 旧 480×320，翻倍多）。像素风语义不变：tile 仍 32px，放大倍数由 zoom 决定；高分屏由浏览器整数倍位图放大天然锐利（pixelArt 即"一像素一像素"）。`#stage` 从"960 居中相框"改 fixed inset:0 铺满（外框阴影移除，暗角保留）；body 不再 flex 居中。约定：RESIZE 下 HUD DOM 元素以窗口为参照（absolute 相对 #stage=窗口），对话卡仍居中、事件日志仍贴右上。
+- 2026-08-28 — **tileset 素材垫底到 32 倍数**：interiors_pt3.png 高 10032（313.5 行）触发 Phaser "Image tile area not tile size multiple" 警告。转换管线新增幂等垫图：非 32 倍数时底部垫透明到下一整行（10048=314 行），tilecount 仍按源声明 5008（313 行），垫出的空白行不在 gid 范围不会被采样。教训：`Image.open` 延迟加载，with 块外 paste 会因文件已关崩——先 `img.load()`。
 - 2026-08-26 — **前端美化（纯 CSS 表现层）**：主题色收敛到 `:root` CSS 变量（暖纸/深棕单一源头）；舞台 `#stage` 圆角+多层 box-shadow 相框化，`#hud::after` 内阴影暗角（`#hud` 加 `isolation:isolate` 保证只压画布不压面板）；事件日志/对话历史毛玻璃+自绘滚动条；`.hud-btn` 统一 hover/active/focus-visible；播报按钮展开态反色（`hud.ts` 同步 `.active`+aria-expanded）；空日志 CSS 占位「小镇还很安静……」；`prefers-reduced-motion` 关装饰动画。约定：`chat-layer-out` 160ms 与 `CLOSE_ANIM_MS` 锁死，改 CSS 时长必须同步改 JS。
 - 2026-08-26 — **家具交互点自动命名（V3 Phase D）**：勘察发现 CN 版 maze.json 的 address 第 3 层就是 game_object 名（窗口内 239 个交互格 100% 覆盖，Phase B 时误判为"无物体级地址"）——105 个交互簇按多数派物体名自动命名 + OBJECT_RENAME 翻译到 V3 世界观（去旧世界专名/口语化/贴合人设：麦克风→驻唱台），浴室三件套混合簇统一"淋浴区"；每簇 BFS 派生使用点（最近可走格，确定性）。全部在转换脚本单一源头，重跑即得。
 - 2026-08-26 — **细粒度感知三层接线（零 LLM 成本）**：①站位引导——engine._spot_for 按 action 文本匹配家具（精确物体名 > ACTION_OBJECT_HINTS 关键词桥），把居民领到家具使用点而非房间正中央，使用点被占（≤1 格）回退普通站位点；②near_object 广播——public() 在站定时派生身边 2 格内最相关家具（排序键 -matched 优先于距离：被引导到书架旁的人不会报旁边的冰箱），走路中不报（防"在冰箱旁赶路"），sector 与当前地点一致才报（防贴门跨房间缝合）；③对话感知——单聊 prompt 的地点从"小镇图书馆"细化为"小镇图书馆的阅读桌旁"，编年史同步记录。world/objects.py 新模块收口两个查询（preferred_block/nearest_block），派生量不入存档（重算零成本）。
@@ -69,6 +71,7 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 - **降级文案会污染记忆流**（2026-08-17 发现，**2026-08-21 已全面修复**）：planner 降级日程、群聊降级托词现在都不写记忆（对话托词 2026-08-17 已修，planner 与群聊是深检发现的同款复现）。教训保留：测试垃圾要及时清。
 - **mage3 地图有 4 个坏瓦片 id**（2026-08-19 发现）：源数据 assettool 生成缺陷，底行有 251259 这种两个 id 拼接值，超瓦片集范围（352 块）——转换脚本 convert_aitown_map.mjs 已统一清洗为 -1。
 - **站位点必须锁定主连通区**（2026-08-19 换图踩坑）：mage3 房屋内部是被 obj 层围死的封闭孤岛（可走但进不去），初版面包店/杂货店/东南宅点位落在屋内，居民被困死。转换脚本现在会从出生点 BFS 主连通区，孤岛候选点自动挪到最近可达格；test_pathfinding 新增全站位点互通测试。
+- **Phaser v4 quirk：Tiled 图层缺 `opacity` 字段 → 整层瓦片全透明且零报错**（2026-08-28 全屏只剩背景色事故根因）：v4 `ParseTileLayers` 用 `curGroupState.opacity * curl.opacity` 算层 alpha，缺字段得 NaN；`TilemapLayerBase` 构造 `setAlpha(NaN)` 后渲染器 `getTint(tile.tint, NaN*tile.alpha)` 画出的瓦片全部透明——控制台无任何警告，唯一线索是 `layer.alpha === null`（JSON.stringify 把 NaN 序列化为 null）。教训：**自产 Tiled JSON 必须补齐标准字段（opacity/visible），只留 width/height/type/data 不够**；TownScene 已加 `Number.isFinite(alpha)` 兑底。
 - **agent-browser 的 eval 变量会跨调用残留**（2026-08-19 实测：`const s` 报 Identifier already declared）→ 每次用 IIFE 包裹 `(() => {...})()`，或换变量名。
 - **图片预览工具读不了本机截图/PNG**（read_file 报 Image is not supported）→ 验证渲染用像素采样分析（PIL 统计色彩多样性）替代目视，或直接查 DOM/Phaser 对象树。
 - **Phaser v4 无 postFX**（2026-08-19 核实）：FX 系统在 v4 重构为 **Filters**——`camera.filters.internal.addColorMatrix()` 返回带 `.colorMatrix` 的控制器，链式 `brightness/saturate/hue(value, multiply=true)` 叠加。**`brightness` 是乘法（0=黑，1=原图），提亮要传 >1**——传 0.1 画面全黑（实测踩坑，像素分析抓出）。
@@ -83,6 +86,7 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 - **人设前缀 ≠ 世界观**（2026-08-17 用户实测：老宋编造不存在的镇民要给人修椅子）：prompt_prefix 只写"我是谁、我认识谁"，没写"镇上只有这些人" → LLM 自由发挥。修复：`agents/resident.py` 新增 `world_context()`——从 DB 构建完整镇民名单+场所清单+禁止编造约束，逐字固定插在对话 prompt 的人设前缀之后（缓存友好）；`test_dialogue.py` 锁定名单完整性/逐字稳定性/prompt 组装顺序。实测修复后老宋回复贴人设且不编人。
 
 ## 📜 Completed Phases
+- [x] 修复"全屏只剩背景绿"渲染事故（2026-08-28：用户报告页面显示异常。诊断链：像素分析定位纯背景色 → eval 查 Phaser 对象树（瓦片层存在/culling 正常/gidMap 完整）→ 对比可渲染对象发现 `TilemapLayer.alpha === null`（实为 NaN）→ 手动 setAlpha(1) 地图瞬间恢复 → 源码定位到 v4 `ParseTileLayers` 的 `opacity * undefined = NaN`。根因：`convert_ville_map.py` 的 `crop_layers` 重建图层 dict 时只保留 5 字段，丢了 Tiled 标准的 `opacity/visible`（源 tilemap.json 本来有）。修复三层：①转换脚本透传字段（带默认值）；②重跑管线重新生成 town_map_v3.json（diff 验证仅新增 10×2 行，walkable/站位/交互簇零变化，确定性管线实证）；③TownScene `Number.isFinite(alpha)` 兑底 + `VilleLayer` 类型补齐。验证：vitest 23 测全绿 + eslint/tsc 零违规 + 浏览器实测地图渲染恢复、玩家键盘移动正常（y 592→693）、7 居民同步、零 JS 错误。附带发现：headless SwiftShader 下相机 ColorMatrix 滤镜不生效（背景色无滤镜）属环境假象，真实浏览器滤镜正常——用户截图可证。）
 - [x] V3 Phase C：前端切 v3 地图渲染（2026-08-26：TownScene 重写——town_map_v3.json 双角色（Tiled 标准地图 + 项目世界数据），load.tilemapTiledJSON 原生解析 10 层 × 13 tileset（gid 归属/翻转零二次映射）；层序即遮挡语言：前 8 层负 depth、角色 depth=y、Foreground L1/L2 固定 9000（娃娃房敞开室内无屋顶淡出，遮挡由前景层置顶）；阻挡 walkable 网格按行合并 2332 阻挡格→271 矩形静态体；后端 locations.py 改读地图 locations 字段（站位点零手抄）；engine start 时坐标净化防换图卡墙。后端 132 测 + 前端 19 测全绿，浏览器实测渲染/碰撞/对话/昼夜全闭环）
 - [x] V3 Phase D：家具交互点命名与细粒度感知（2026-08-26：发现 maze.json address 第 3 层即 game_object 名（100% 覆盖，Phase B 误判纠正）→ 105 簇自动命名（29 种物体名，OBJECT_RENAME 翻译 + 浴室混合簇→淋浴区）+ BFS 使用点；后端 world/objects.py 新模块（preferred_block 站位引导 / nearest_block 感知查询，均确定性）；engine 三处接线：站位引导（action 匹配家具优先站家具旁，被占回退）、near_object 广播（站定时±2 格最相关家具，排序键 -matched 优先于距离）、单聊 prompt 地点细化（"小镇图书馆的书架旁"，编年史同步）；前端 doingText 纯函数拼 hint（去重：action 已含物体名不重复报）。后端 145 测（+13）+ ruff；前端 tsc/eslint 零违规 + vitest 23 测（+4）。浏览器实测：老周@咖啡柜台（关键词桥）、老宋@阅读桌（被动就近）、hint"（在阅读桌旁，正在陪苏晚待一会儿）"、对话问"你在哪"→"图书馆呢。"、编年史 location=小镇图书馆的阅读桌旁、事件流"小豆子来到了合租公寓厨房，在冰箱旁"）
 - [x] V3 Phase A：新居民设计拍板（2026-08-25：`specs/v3_residents_draft.md`，斯坦福叙事体 7 人——沈青梧/慕容瑾/高新/周星星/李算/吴文/郑巧，昼夜双聚集点作息；改名/店名保留/立绘重新生成/暗线保留全部拍板）

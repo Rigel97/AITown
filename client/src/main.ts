@@ -14,9 +14,17 @@ declare global {
 
 window.__aitownGame = new Phaser.Game({
   type: Phaser.AUTO,
-  width: 960,
-  height: 640,
   parent: "game",
+  // 画布跟随窗口（RESIZE）：同屏看到更多世界，而不是固定 960×640 在小窗里缩着。
+  // 像素风语义不变——tile 仍 32px，zoom 决定屏幕放大倍数；高分屏由浏览器做
+  // 整数倍位图放大，天然锐利（pixelArt 本身就是"一像素一像素"的放大观感）。
+  scale: {
+    mode: Phaser.Scale.RESIZE,
+    width: "100%",
+    height: "100%",
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+    autoRound: true,
+  },
   backgroundColor: "#2d5016",
   pixelArt: true,
   physics: {

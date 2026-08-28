@@ -165,6 +165,17 @@ export class TownScene extends Phaser.Scene {
       );
     }
     // —— 第二阶段加载：folk/shadow + 地图声明的全部 tileset 图片 ——
+    // 加载提示：13 张 tileset PNG 本地也要一两秒，绿底干等会让人以为卡死——
+    // 一行"小镇正在醒来…"+ 进度，加载完即销毁（零残留）
+    const loading = this.add
+      .text(this.scale.width / 2, this.scale.height / 2, "小镇正在醒来…", {
+        fontSize: "24px",
+        color: "#1a2f0e",
+        backgroundColor: "rgba(255,248,231,0.9)",
+        padding: { x: 18, y: 12 },
+      })
+      .setOrigin(0.5)
+      .setDepth(HUD_DEPTH);
     this.load.spritesheet("folk", "assets/v2/folk2.png", {
       frameWidth: FOLK_FRAME_W,
       frameHeight: FOLK_FRAME_H,
@@ -173,7 +184,13 @@ export class TownScene extends Phaser.Scene {
     for (const ts of meta.tilesets) {
       this.load.image(ts.name, ts.image); // 纹理键 = tileset 名，addTilesetImage 直接绑定
     }
-    this.load.once(Phaser.Loader.Events.COMPLETE, () => this.buildWorld(meta));
+    this.load.on(Phaser.Loader.Events.PROGRESS, (value: number) => {
+      loading.setText(`小镇正在醒来… ${Math.round(value * 100)}%`);
+    });
+    this.load.once(Phaser.Loader.Events.COMPLETE, () => {
+      loading.destroy();
+      this.buildWorld(meta);
+    });
     this.load.start();
   }
 
@@ -195,6 +212,10 @@ export class TownScene extends Phaser.Scene {
     for (const layer of meta.layers) {
       const created = map.createLayer(layer.name, tilesets, 0, 0);
       if (!created) throw new Error(`图层创建失败：${layer.name}`);
+      // 防御非标地图数据：Phaser v4 解析 Tiled 层时用 opacity 直接参与 alpha 乘法，
+      // 字段缺失会得到 NaN——瓦片全部渲染成全透明且无任何报错（2026-08-28
+      // "全屏只剩背景色"事故的根因，转换管线已补字段，这里兜底防同类复发）
+      if (!Number.isFinite(created.alpha)) created.setAlpha(1);
       if (FOREGROUND_LAYER_NAMES.has(layer.name)) {
         created.setDepth(FOREGROUND_DEPTH);
       } else {
@@ -414,7 +435,16 @@ export class TownScene extends Phaser.Scene {
 
   private refreshStatusText(): void {
     const label = this.gameTimeLabel || "连接中…";
-    this.statusText.setText(`小镇时间: ${label} · 视角×${CAMERA_ZOOMS[this.zoomIndex]}${this.currentLightIcon()}`);
+    this.statusText.setText(
+      `${this.formatGameTime(label)} · 视角×${CAMERA_ZOOMS[this.zoomIndex]}${this.currentLightIcon()}`,
+    );
+  }
+
+  /** 服务端 game_time 是 "dayN-HH:MM"（内部格式），展示转成"小镇第N天 HH:MM" */
+  private formatGameTime(label: string): string {
+    const m = /^day(\d+)-(\d{2}:\d{2})$/.exec(label);
+    if (!m) return label;
+    return `小镇第${m[1]}天 ${m[2]}`;
   }
 
   // ---------- 居民插值 ----------

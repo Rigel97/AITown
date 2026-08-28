@@ -162,12 +162,17 @@ def crop_layers(tiled):
                     else:
                         break
                 used_names.add(owner)
-        # width/height/type 是 Tiled JSON 必需字段（Phaser 解析层尺寸用）
+        # width/height/type/opacity/visible 都是 Tiled JSON 标准字段，一个不能少：
+        # Phaser v4 解析层时直接读 curl.opacity 参与 alpha 乘法（ParseTileLayers
+        # 里 curGroupState.opacity * curl.opacity）——字段缺失时 1×undefined=NaN，
+        # setAlpha(NaN) 让整层瓦片渲染成全透明（2026-08-28 全屏只剩背景色的根因）
         layers.append({
             "name": lay["name"].strip(),
             "type": "tilelayer",
             "width": COLS,
             "height": ROWS,
+            "opacity": lay.get("opacity", 1),
+            "visible": lay.get("visible", True),
             "data": data,
         })
     out_tilesets = []
@@ -175,10 +180,21 @@ def crop_layers(tiled):
         if ts["name"] not in used_names:
             continue
         image = f"assets/ville/{Path(ts['image']).name}"
-        # 声明真实 PNG 尺寸（个别素材有半行余量，如 interiors_pt3 高 10032 ≠
-        # tilecount 推算的 10016——按真实尺寸声明，gid→格的行列换算只依赖 columns）
         with Image.open(PUBLIC / image) as img:
             w, h = img.size
+            img.load()  # 立即解码，避免 with 关闭文件后 paste 时再触发延迟 load
+        # 半行余量素材垫底到整行（如 interiors_pt3 高 10032 = 313.5 行）：
+        # Phaser 检查 "Image tile area not tile size multiple"（高 % 32 != 0 就
+        # 警告），且 Tiled 规范的 tileset 图片高度必须是 tileheight 的整数倍。
+        # 底部垫透明安全：tilecount 仍是源声明值（313 行），垫出的第 314 行
+        # 空白不在 gid 范围内不会被采样。幂等：已是 32 倍数则跳过。
+        if h % 32 != 0:
+            pad_h = ((h // 32) + 1) * 32
+            padded = Image.new("RGBA", (w, pad_h), (0, 0, 0, 0))
+            padded.paste(img, (0, 0))
+            padded.save(PUBLIC / image)
+            print(f"  ! tileset {ts['name']} 高度 {h} 非 32 倍数，垫到 {pad_h}")
+            h = pad_h
         out_tilesets.append({
             "name": ts["name"],
             "firstgid": ts["firstgid"],

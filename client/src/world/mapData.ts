@@ -57,12 +57,16 @@ export interface VilleTileset {
   image: string;
 }
 
-/** 渲染层：data 是行主序原始 gid（含 Tiled 翻转标志位，Phaser 原生解析） */
+/** 渲染层：data 是行主序原始 gid（含 Tiled 翻转标志位，Phaser 原生解析）。
+ *  opacity/visible 是 Tiled 标准字段——Phaser v4 解析层 alpha 时直接乘
+ *  curl.opacity，缺字段会得 NaN 导致整层瓦片全透明（不报错），勿删。 */
 export interface VilleLayer {
   name: string;
   type: "tilelayer";
   width: number;
   height: number;
+  opacity: number;
+  visible: boolean;
   data: number[];
 }
 

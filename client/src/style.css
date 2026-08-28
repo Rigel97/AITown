@@ -13,11 +13,7 @@
 
 body {
   margin: 0;
-  display: flex;
-  justify-content: center;
-  align-items: center;
   min-height: 100vh;
-  padding: 0 16px;
   box-sizing: border-box;
   /* 深林暮色：中心微亮的绿 → 边缘近黑，底部一点暖光托住画布 */
   background:
@@ -33,23 +29,23 @@ body {
   color: var(--ink);
 }
 
-/* 舞台：canvas + HUD 叠放。圆角相框 + 环形框边 + 大投影，
-   让 960×640 的游戏像被"装裱"在页面中央。 */
+/* 舞台：canvas + HUD 叠放。画布跟随窗口（RESIZE 模式），舞台铺满可视区；
+   暗角 #hud::after 保留"有空气感"的沉浸提示，外框阴影随全屏化移除。 */
 #stage {
-  position: relative;
-  width: 960px;
-  height: 640px;
-  margin: 20px 0;
-  border-radius: 14px;
-  overflow: hidden; /* 裁掉画布直角 */
-  box-shadow:
-    0 0 0 1px rgba(255, 240, 200, 0.1),
-    /* 相框高光描边 */
-    0 0 0 7px rgba(24, 17, 10, 0.5),
-    /* "画框"木边 */
-    0 0 0 8px rgba(255, 240, 200, 0.06),
-    0 30px 70px var(--shadow-deep),
-    0 10px 24px rgba(0, 0, 0, 0.35);
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+#game {
+  width: 100%;
+  height: 100%;
+}
+
+#game canvas {
+  display: block;
 }
 
 #hud {
