@@ -16,3 +16,9 @@ saves/
 
 # OS
 .DS_Store
+
+# 浏览器自动化（playwright-cli）的截图与快照
+.playwright-cli/
+
+# 地图美化前的本地回滚备份（beautify_map.py 自动生成）
+*.pre_beautify.json

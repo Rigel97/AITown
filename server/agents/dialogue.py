@@ -35,6 +35,12 @@ CHAT_TIMEOUT_SECONDS = 15.0
 TURN_TIMEOUT_SECONDS = 12.0
 # 群聊回应超时
 GROUP_TIMEOUT_SECONDS = 15.0
+# 邀请/加入决策超时：回复只有一个字，不需要长回复的待遇（审查 S3：
+# 原 15s 让居民"愣住"半分钟才决定，拉长邀请感知延迟）
+DECIDE_TIMEOUT_SECONDS = 8.0
+# transcript 注入 prompt 的最大句数（审查 S1：玩家反复插话不增加回合数，
+# transcript 只增不减，prompt token 线性膨胀直到超时；截尾保留最近上下文）
+TRANSCRIPT_PROMPT_TAIL = 12
 
 # 降级托词池：多条轮换，避免同一句反复出现瞬间出戏。
 # 写作约束（2026-08-22 四轮 G1）：①纯台词无括号动作——台词卫生规则要求
@@ -183,7 +189,7 @@ async def decide_accept(
 【当前情境】现在是 {game_time}，你在{location}，正在忙手头的事。{inviter_name}走过来想和你聊几句。
 
 【指令】以你的性格和当前的事，你会停下来聊吗？只回答一个字：会 或 不。"""
-    raw = await chat(prompt, tier="light", timeout=CHAT_TIMEOUT_SECONDS)
+    raw = await chat(prompt, tier="light", timeout=DECIDE_TIMEOUT_SECONDS)
     return parse_yesno(raw)
 
 
@@ -205,7 +211,7 @@ async def decide_join(
 {transcript_tail or "（听不太清）"}
 
 【指令】以你的性格，你会凑过去加入他们吗？只回答一个字：会 或 不。"""
-    raw = await chat(prompt, tier="light", timeout=CHAT_TIMEOUT_SECONDS)
+    raw = await chat(prompt, tier="light", timeout=DECIDE_TIMEOUT_SECONDS)
     return parse_yesno(raw)
 
 
@@ -329,8 +335,11 @@ async def conversation_turn(
     else:
         mem_lines = "（没想起什么相关的事）"
     others = "、".join(other_names)
+    # 截尾注入：transcript 全文保留（编年史/记忆摘要用），prompt 只带最近
+    # N 句——连续插话不再无限膨胀 prompt（审查 S1）
     transcript_lines = (
-        "\n".join(f"{n}：{t}" for n, t in transcript) or "（刚碰上，还没说话）"
+        "\n".join(f"{n}：{t}" for n, t in transcript[-TRANSCRIPT_PROMPT_TAIL:])
+        or "（刚碰上，还没说话）"
     )
     prompt = f"""{speaker.prompt_prefix}
 
@@ -397,7 +406,10 @@ async def player_join_reply(
     （2026-08-22 优化 A2）。
     """
     names = [p.name for p in participants]
-    transcript_lines = "\n".join(f"{n}：{t}" for n, t in transcript) or "（刚开始聊）"
+    transcript_lines = (
+        "\n".join(f"{n}：{t}" for n, t in transcript[-TRANSCRIPT_PROMPT_TAIL:])
+        or "（刚开始聊）"
+    )
     personas = "\n\n".join(f"【{p.name}】{p.prompt_prefix}" for p in participants)
     others = "、".join(names)
     memory_blocks: list[str] = []

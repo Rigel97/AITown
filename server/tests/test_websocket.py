@@ -137,14 +137,17 @@ def test_save_message_returns_ack(monkeypatch) -> None:
 
 
 def test_save_message_failure_still_acks(monkeypatch) -> None:
-    """存档失败不炸连接：ok=False 回包，前端提示重试。"""
+    """存档失败不炸连接：ok=False 回包，前端提示重试。
 
-    def boom(*args: object, **kwargs: object) -> str:
+    引擎已是 conftest 的隔离替身，这里直接让替身的 save_now 抛错
+    （原 monkeypatch 模块级 we.save_world 对替身无效，审查 A1 改造点）。"""
+
+    def boom() -> str:
         raise OSError("disk full")
 
+    monkeypatch.setattr(main.engine, "save_now", boom)
     with client.websocket_connect("/ws") as ws:
         ws.receive_json()
-        monkeypatch.setattr(we, "save_world", boom)
         ws.send_json({"type": "save", "payload": {}})
         msg = ws.receive_json()
         assert msg["type"] == "save_ack"

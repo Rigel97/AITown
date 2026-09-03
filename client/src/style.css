@@ -113,6 +113,100 @@ body {
   right: 10px;
 }
 
+/* 状态栏（屏幕左上角固定）：游戏时间/视角/光照，DOM 原生渲染保清晰 */
+#status-bar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  pointer-events: none;
+  padding: 5px 12px;
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  background: rgba(255, 248, 231, 0.88);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: bold;
+  box-shadow: 0 2px 6px rgba(20, 14, 8, 0.25);
+}
+
+/* 设置按钮：挨着播报按钮，两者之间留 8px */
+#settings-toggle {
+  position: absolute;
+  top: 10px;
+  right: 130px;
+}
+
+/* ===== 设置面板（右上角，播报按钮下方） ===== */
+#settings-panel {
+  position: absolute;
+  top: 48px;
+  right: 130px;
+  width: 240px;
+  pointer-events: auto;
+  background: rgba(255, 248, 231, 0.94);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--ink);
+  box-shadow: 0 8px 24px rgba(20, 14, 8, 0.35);
+  animation: panel-in 180ms ease-out;
+  z-index: 5;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.setting-label {
+  font-weight: bold;
+}
+
+.seg-group {
+  display: flex;
+  gap: 4px;
+}
+
+.seg-group button,
+.seg-btn {
+  padding: 4px 10px;
+  border: 2px solid var(--ink);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.seg-group button:hover,
+.seg-btn:hover {
+  background: rgba(20, 14, 8, 0.08);
+}
+
+.seg-group button.selected,
+.seg-btn:not(.off) {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.seg-btn.off {
+  opacity: 0.75;
+}
+
 #event-log-toggle.active {
   background: var(--ink);
   color: var(--paper);
@@ -149,9 +243,27 @@ body {
 }
 
 #event-log .event {
-  padding: 3px 0;
+  padding: 3px 0 3px 8px;
+  border-left: 3px solid transparent;
   border-bottom: 1px dashed var(--line);
   animation: event-in 260ms ease-out;
+}
+
+/* 分类色条：对话米金 / 时刻天蓝 / 动作草绿 / 其他灰（不引 emoji，颜色即分类） */
+#event-log .event.cat-dialogue {
+  border-left-color: #d9a441;
+}
+
+#event-log .event.cat-time {
+  border-left-color: #6d8fa8;
+}
+
+#event-log .event.cat-action {
+  border-left-color: #7ca25c;
+}
+
+#event-log .event.cat-misc {
+  border-left-color: #c5bda8;
 }
 
 #event-log .event .time {
@@ -289,6 +401,20 @@ body {
   line-height: 1.7;
   color: var(--ink);
   white-space: pre-wrap; /* 群聊多行按说话人分行 */
+}
+
+/* 逐字打印中：尾随闪烁光标（打完即消失） */
+#chat-text.typing::after {
+  content: "▌";
+  color: var(--ink);
+  opacity: 0.55;
+  animation: type-caret 0.9s steps(1) infinite;
+}
+
+@keyframes type-caret {
+  50% {
+    opacity: 0;
+  }
 }
 
 /* "正在想……"呼吸动画：治愈系动效要柔，不闪跳 */

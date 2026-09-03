@@ -14,7 +14,7 @@ Keep it lean — details live in the Context Files at the bottom. Update Current
 ## Setup & Commands
 Execute these commands for standard development workflows. Do not invent new package manager commands.
 - **Setup:** `cd client && npm install`；`cd server && pip install -r requirements.txt`（用 uv 或 venv 建虚拟环境）
-- **Development:** `./start.sh`（一键起前后端）；或手动：后端 `cd server && uvicorn main:app --reload`，前端 `cd client && npm run dev`
+- **Development:** `./start.sh`（一键起前后端）；或手动：后端 `cd server && uvicorn main:app --reload --port 9000`，前端 `cd client && npm run dev`（5174）
 - **Testing:** `cd client && npm test`；`cd server && pytest`
 - **Linting & Formatting:** `cd client && npm run lint`；`cd server && ruff check . && ruff format --check .`
 - **Build:** `cd client && npm run build`（可选：FastAPI 托管静态产物单进程演示）
@@ -59,10 +59,10 @@ Do NOT modify these without explicit human approval:
 - **Workflow Discipline:** Pre-commit hooks must pass before commits (or ask before bypassing). If verification fails, fix it before continuing.
 
 ## Current State 📍
-**Last Updated:** 2026-08-26
-**Working On:** V3 视觉大改版（the_ville 裁剪版地图）；Phase A/B/C/D 全部完成 ✅，下一步 V3 居民落库（seed 重写 + 缓存重置需拍板）
-**Recently Completed:** Phase 3 全部 + V3 Phase A（七人新叙事体人设拍板）→ B（the_ville 裁剪管线 122×35）→ C（前端多层瓦片渲染 + y-sort + 阻挡合并）→ D（105 家具交互点自动命名 + 细粒度感知三层接线：站位引导/near_object 广播/对话地点细化，零 LLM 成本）；后端 145 测 + 前端 23 测 + lint 零违规，浏览器实测全闭环
-**Blocked By:** 无（V3 居民落库需用户拍板：改人设 = 一次性重置 Prompt 缓存 + 重估成本）
+**Last Updated:** 2026-09-03
+**Working On:** V3 居民落库完成 ✅（七人叙事体人设上线，seed/存档/前端映射/立绘占位全链路）；下一步：新立绘素材替换占位（用户提供）+ 持续观察涌现质量；另有前端名牌清晰度专项已完成（像素字体 + resolution 2 + 去 emoji）
+**Recently Completed:** V3 居民落库（2026-09-03）：seed.py 重写七人（沈青梧/慕容瑾/高新/周星星/李算/吴文/郑巧，叙事体三段 + 作息一等公民），备份后重置存档（aitown.db→saves/v2_backup_20260903/），前端 CHARACTER_INDEX/SPEAKER_COLORS 同步新 id、立绘按气质映射占位（沈←红姐/暮←老宋/高←阿茉/周←苏晚/李←小豆子/吴←老周/郑←林师傅），server 测试同步后 145 测 + 前端 23 测全绿，浏览器实测新居民/精灵/坐标全部正确；同日名牌清晰度：Fusion Pixel 12px 中文像素字体（unicode-range 切片预载）+ Text resolution 2 + LINEAR，去头顶 emoji（改人设 = Prompt 缓存已重置，首日成本偏高属预期）
+**Blocked By:** 无
 
 ## Roadmap 🗺️
 

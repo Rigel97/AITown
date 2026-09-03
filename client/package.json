@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --port 5174",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
@@ -23,6 +23,7 @@
     "vitest": "^4.1.11"
   },
   "dependencies": {
+    "@vp-tw/cjk-web-fonts-fusion-pixel-font": "^0.0.1",
     "phaser": "^4.2.1"
   }
 }

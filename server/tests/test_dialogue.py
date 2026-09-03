@@ -43,7 +43,7 @@ def _fresh_db(tmp_path: Path) -> Path:
 def test_world_context_lists_all_residents_and_places(tmp_path: Path) -> None:
     db = _fresh_db(tmp_path)
     block = world_context(db)
-    for name in ("林师傅", "苏晚", "阿茉", "老周", "红姐", "小豆子", "老宋"):
+    for name in ("沈青梧", "慕容瑾", "高新", "周星星", "李算", "吴文", "郑巧"):
         assert name in block
     for place in ("青梧咖啡", "九号酒馆", "主街"):
         assert place in block
@@ -254,13 +254,13 @@ def test_parse_turn_all_other_lines_is_failure() -> None:
 def test_conversation_turn_rejects_repeated_line(tmp_path, monkeypatch) -> None:
     """复读守卫：和自己在场说过的原话相同（含标点差异）→ 视为没接上。"""
     db = _fresh_db(tmp_path)
-    resident = load_residents(db)[0]  # 林师傅
+    resident = load_residents(db)[0]  # 沈青梧
 
     async def fake_chat(prompt: str, tier: str, timeout: float = 0) -> str:
         return "刚出炉的，尝尝！"
 
     monkeypatch.setattr(dialogue, "chat", fake_chat)
-    transcript = [("林师傅", "刚出炉的，尝尝"), ("红姐", "好吃！")]
+    transcript = [("沈青梧", "刚出炉的，尝尝"), ("慕容瑾", "还行。")]
     text, want_end = asyncio.run(
         dialogue.conversation_turn(
             resident, ["红姐"], transcript, "day1-08:00", "面包店", db
@@ -275,13 +275,13 @@ def test_conversation_turn_injects_memories(tmp_path, monkeypatch) -> None:
     最近话题，命中相关记忆（如上次聊天的散场摘要）要注入 prompt。"""
     db = _fresh_db(tmp_path)
     residents = load_residents(db)
-    speaker = next(r for r in residents if r.name == "林师傅")
-    # 上次和红姐聊过供货日（散场摘要类记忆，importance 5）
+    speaker = next(r for r in residents if r.name == "沈青梧")
+    # 上次和慕容瑾聊过补货（散场摘要类记忆，importance 5）
     add_memory(
         speaker.id,
         "day1-09:00",
         "dialogue",
-        "我在广场和红姐聊天：红姐说「明天供货日来新面粉」",
+        "我在九号酒馆和慕容瑾聊天：慕容瑾说「周五到了批新的金酒」",
         5,
         db,
     )
@@ -289,29 +289,29 @@ def test_conversation_turn_injects_memories(tmp_path, monkeypatch) -> None:
 
     async def fake_chat(prompt: str, tier: str, timeout: float = 0) -> str:
         captured["prompt"] = prompt
-        return "那敢情好，新面粉烤出来的皮才脆。"
+        return "那敢情好，新酒到了才好待客。"
 
     monkeypatch.setattr(dialogue, "chat", fake_chat)
     text, want_end = asyncio.run(
         dialogue.conversation_turn(
             speaker,
-            ["红姐"],
-            [("红姐", "明天供货日的青菜也新鲜")],
+            ["慕容瑾"],
+            [("慕容瑾", "周五到的货，你尝尝就知道了")],
             "day2-08:00",
-            "广场",
+            "九号酒馆",
             db,
         )
     )
     prompt = captured["prompt"]
     # 检索命中并注入：同伴名+话题做检索词，上次聊过的事被想起
     assert "【你记得的事】" in prompt
-    assert "明天供货日来新面粉" in prompt
+    assert "周五到了批新的金酒" in prompt
     # 结构与玩家对话同款：prefix 打头（吃缓存），世界观在前、记忆其后
     assert prompt.startswith(speaker.prompt_prefix)
     assert prompt.index("【小镇】") < prompt.index("【你记得的事】")
     assert prompt.index("【你记得的事】") < prompt.index("【当前情境】")
     # 解析行为不受记忆注入影响
-    assert text == "那敢情好，新面粉烤出来的皮才脆。"
+    assert text == "那敢情好，新酒到了才好待客。"
     assert want_end is False
 
 
@@ -358,29 +358,62 @@ def test_player_join_reply_injects_memories(tmp_path, monkeypatch) -> None:
     """A2：群聊不能"集体失忆"——各参与者的相关记忆按人注入 prompt
     （单聊记得玩家的事，群聊里也得记得）。"""
     db = _fresh_db(tmp_path)
-    baker = load_residents(db)[0]  # 林师傅
+    baker = load_residents(db)[0]  # 沈青梧
     others = [r for r in load_residents(db) if r.id != baker.id]
-    # 给林师傅写一条与"面包"相关的玩家互动记忆（importance 6，关键词命中）
+    # 给沈青梧写一条与“咖啡”相关的玩家互动记忆（importance 6，关键词命中）
     add_memory(
-        baker.id, "day1-09:00", "dialogue", "玩家对我说：「上次买的面包真好吃」", 6, db
+        baker.id, "day1-09:00", "dialogue", "玩家对我说：「上次喝的拿铁真香」", 6, db
     )
 
     captured: dict[str, str] = {}
 
     async def fake_chat(prompt: str, tier: str, timeout: float = 0) -> str:
         captured["prompt"] = prompt
-        return "林师傅：好嘞，还给你留着呢。"
+        return "沈青梧：好嘞，还给你留着呢。"
 
     monkeypatch.setattr(dialogue, "chat", fake_chat)
     lines = asyncio.run(
         dialogue.player_join_reply(
-            [baker, others[0]], "面包还有吗", [], "day2-08:00", "面包店", db
+            [baker, others[0]], "还有咖啡吗", [], "day2-08:00", "青梧咖啡", db
         )
     )
     prompt = captured["prompt"]
-    # 记忆段存在且包含林师傅的那条玩家互动；无记忆的参与者不产生记忆块
+    # 记忆段存在且包含沈青梧的那条玩家互动；无记忆的参与者不产生记忆块
     assert "【你们各自记得的事】" in prompt
-    assert "上次买的面包真好吃" in prompt
-    assert prompt.index("【你们各自记得的事】") < prompt.index("【林师傅】")
+    assert "上次喝的拿铁真香" in prompt
+    assert prompt.index("【你们各自记得的事】") < prompt.index("【沈青梧】")
     # 解析结果正常（记忆注入不影响输出格式约束）
-    assert lines == [("林师傅", "好嘞，还给你留着呢。")]
+    assert lines == [("沈青梧", "好嘞，还给你留着呢。")]
+
+
+def test_conversation_turn_prompt_truncates_transcript(tmp_path, monkeypatch) -> None:
+    """审查 S1：玩家反复插话不增加回合数，transcript 只增不减——
+    prompt 必须只注入最近 TRANSCRIPT_PROMPT_TAIL 句，防 token 线性膨胀。"""
+    import asyncio
+
+    db = _fresh_db(tmp_path)
+    residents = load_residents(db)
+    speaker = next(r for r in residents if r.name == "沈青梧")
+    # 造 30 句 transcript（模拟玩家连插 20+ 句的极端场景）
+    transcript = [("沈青梧", "第0句")] + [("玩家", f"插话{i}") for i in range(29)]
+    captured: dict[str, str] = {}
+
+    async def fake_chat(prompt: str, tier: str, timeout: float = 0) -> str:
+        captured["prompt"] = prompt
+        return "嗯，我听着呢。"
+
+    monkeypatch.setattr(dialogue, "chat", fake_chat)
+    asyncio.run(
+        dialogue.conversation_turn(
+            speaker, ["慕容瑾"], transcript, "day2-08:00", "青梧咖啡", db
+        )
+    )
+    prompt = captured["prompt"]
+    # 最早期的句子不该进 prompt（被截尾），最近的一句必须在
+    assert "第0句" not in prompt
+    assert "插话28" in prompt
+    # prompt 里的对话记录句数 = TRANSCRIPT_PROMPT_TAIL
+    import re as _re
+
+    record_lines = _re.findall(r"^(?:沈青梧|慕容瑾|玩家)：", prompt, _re.MULTILINE)
+    assert len(record_lines) == dialogue.TRANSCRIPT_PROMPT_TAIL

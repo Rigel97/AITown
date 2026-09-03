@@ -16,7 +16,23 @@
       <!-- HUD：文字 UI 用 DOM（清晰），像素世界用 Canvas -->
       <div id="hud">
         <button id="event-log-toggle" class="hud-btn" type="button" aria-expanded="false" aria-controls="event-log">📜 小镇播报</button>
+        <button id="settings-toggle" class="hud-btn" type="button">⚙ 设置</button>
+        <div id="settings-panel" class="hidden">
+          <div class="setting-row">
+            <span class="setting-label">文字速度</span>
+            <div class="seg-group" id="seg-text-speed">
+              <button type="button" data-v="slow">慢</button>
+              <button type="button" data-v="normal">标准</button>
+              <button type="button" data-v="instant">即显</button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label">昼夜光照</span>
+            <button type="button" id="light-toggle" class="seg-btn">开</button>
+          </div>
+        </div>
         <div id="event-log" class="hidden"></div>
+        <div id="status-bar">连接中…</div>
         <div id="hint" class="hidden"></div>
         <!-- 探出式一体化对话卡：立绘骑在卡片左上、头部探出卡片顶缘 -->
         <div id="chat-layer" class="hidden">

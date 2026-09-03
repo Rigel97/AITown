@@ -14,6 +14,7 @@
 // - "正在想…"在卡片台词区呼吸显示；回复丢失（error/断线）时恢复上一句，不留白卡。
 
 import { SPEAKER_COLORS, portraitUrl, speakerColor } from "./speakerStyle";
+import { typeSpeedMultiplier } from "../settings";
 
 export interface HudCallbacks {
   onSend: (text: string) => void;
@@ -28,8 +29,19 @@ interface ChatLine {
 }
 
 const MAX_EVENTS = 50;
-/** 群聊展示队列：每句停留时长（1–2 句台词的阅读时间） */
+
+/** 事件分类（决定日志条目的左侧色条，不引 emoji）：对话/时刻/动态/其他 */
+function eventCategory(text: string): string {
+  if (/(聊天|聊了|谈起|搭话|说)/.test(text)) return "cat-dialogue";
+  if (/(天亮|黎明|清晨|入夜|天黑|黄昏|深夜|白天|时刻)/.test(text)) return "cat-time";
+  if (/(开始|前往|起身|走到|回家|出门|离开|回来)/.test(text)) return "cat-action";
+  return "cat-misc";
+} /** 群聊展示队列：每句停留时长（1–2 句台词的阅读时间，从打字完成后起算） */
 const DWELL_MS = 1600;
+/** 逐字打印：每字间隔（中文阅读舒适值）；标点后微顿更“像在说话” */
+const TYPE_MS = 26;
+const PUNCT_PAUSE_MS = 130;
+const PUNCTUATION = "，。！？…；：、—“”";
 /** 立绘切换：先淡出旧图再换 src 的间隔 */
 const PORTRAIT_FADE_OUT_MS = 110;
 /** 关闭动画时长（与 CSS chat-layer-out 一致） */
@@ -44,6 +56,7 @@ export class Hud {
   private historyBtn = document.getElementById("chat-history-btn") as HTMLButtonElement;
   private historyPanel = document.getElementById("chat-history")!;
   private hint = document.getElementById("hint")!;
+  private statusBar = document.getElementById("status-bar")!;
   private eventLog = document.getElementById("event-log")!;
   private eventToggle = document.getElementById("event-log-toggle") as HTMLButtonElement;
 
@@ -64,6 +77,10 @@ export class Hud {
   private queueTimer: number | undefined;
   private portraitTimer: number | undefined;
   private closeTimer: number | undefined;
+  /** 逐字打印状态：进行中时点击台词区可立即补全 */
+  private typeTimer: number | undefined;
+  private typingFullText = "";
+  private typingPos = 0;
   /** 临时提示的生效截止（performance.now()）：期间 setHint(null) 不清 */
   private hintUntil = 0;
   /** 当前显示的 hint 文本（null=隐藏）：same-value 短路用 */
@@ -87,6 +104,8 @@ export class Hud {
       }
     });
     this.historyBtn.addEventListener("click", () => this.toggleHistory());
+    // 打字中点台词区 = 跳过动画立即补全（尊重玩家时间；点击是隐藏福利不加 pointer）
+    this.chatText.addEventListener("click", () => this.completeTyping());
     this.eventToggle.addEventListener("click", () => {
       // toggle 返回"hidden 是否仍在"（true=加了 hidden 即已收起）
       const open = !this.eventLog.classList.toggle("hidden");
@@ -123,7 +142,7 @@ export class Hud {
     this.setPortrait(residentId);
     const lines = this.histories.get(residentId) ?? [];
     const last = lines[lines.length - 1] ?? null;
-    this.setLineView(last ?? { who: residentName, text: "" });
+    this.setLineView(last ?? { who: residentName, text: "" }, true); // 重开恢复不重打字
     this.renderHistory();
     this.chatLayer.classList.remove("hidden", "closing");
     if (this.closeTimer !== undefined) {
@@ -145,6 +164,7 @@ export class Hud {
 
   closeChat(): void {
     this.flushDisplayQueue();
+    this.completeTyping();
     this.thinkingId = null;
     this.closeHistory();
     if (this.closeTimer !== undefined) window.clearTimeout(this.closeTimer);
@@ -174,6 +194,7 @@ export class Hud {
   /** “对方正在想…”：卡片台词区呼吸显示（立绘保持，名牌保持） */
   showThinking(residentId: string): void {
     this.flushDisplayQueue();
+    this.completeTyping();
     this.thinkingId = residentId;
     if (residentId === this.currentId && this.isChatOpen) {
       this.chatText.textContent = "……";
@@ -187,7 +208,7 @@ export class Hud {
     if (residentId != null && residentId !== this.thinkingId) return;
     if (this.thinkingId === this.currentId && this.isChatOpen) {
       this.chatText.classList.remove("thinking");
-      this.chatText.textContent = this.lastView?.text ?? "";
+      this.chatText.textContent = this.lastView?.text ?? ""; // 错误恢复不走打字机
     }
     this.thinkingId = null;
   }
@@ -211,7 +232,7 @@ export class Hud {
 
   addEvent(time: string, text: string): void {
     const item = document.createElement("div");
-    item.className = "event";
+    item.className = `event ${eventCategory(text)}`;
     const timeEl = document.createElement("span");
     timeEl.className = "time";
     timeEl.textContent = time;
@@ -220,6 +241,12 @@ export class Hud {
     while (this.eventLog.childElementCount > MAX_EVENTS) {
       this.eventLog.lastElementChild?.remove();
     }
+  }
+
+  /** 状态栏（屏幕左上角固定，DOM 原生渲染）：same-value 短路防 60fps 重排 */
+  setStatus(text: string): void {
+    if (text === this.statusBar.textContent) return;
+    this.statusBar.textContent = text;
   }
 
   setHint(text: string | null): void {
@@ -267,7 +294,9 @@ export class Hud {
       return;
     }
     this.setLineView(line);
-    this.queueTimer = window.setTimeout(() => this.playNextInQueue(), DWELL_MS);
+    // 停留 = 打字时长 + 阅读时长：打完这一句再停 DWELL_MS 才切下一句
+    const typeMs = Math.round(line.text.length * TYPE_MS * typeSpeedMultiplier());
+    this.queueTimer = window.setTimeout(() => this.playNextInQueue(), typeMs + DWELL_MS);
   }
 
   private flushDisplayQueue(): void {
@@ -278,15 +307,55 @@ export class Hud {
     this.displayQueue = [];
   }
 
-  /** 更新卡片：名牌（专属色）+ 台词；立绘按说话人切换（玩家行保持当前立绘） */
-  private setLineView(line: ChatLine): void {
+  /** 更新卡片：名牌（专属色）+ 台词；立绘按说话人切换（玩家行保持当前立绘）。
+   *  instant = 跳过打字机直接全文（重开卡恢复/错误恢复等“不该重播”的场景） */
+  private setLineView(line: ChatLine, instant = false): void {
     this.lastView = line.text ? line : null;
     const residentId = this.cb.resolveResident(line.who);
     if (residentId !== null) this.setPortrait(residentId);
     this.chatName.textContent = line.who;
     this.chatName.style.background = speakerColor(residentId);
     this.chatText.classList.remove("thinking");
-    this.chatText.textContent = line.text;
+    this.typeLine(line.text, instant);
+  }
+
+  /** 逐字打印台词；返回总时长（ms，供展示队列调度 dwell 起点估算）。
+   *  文字速度“即显”（倍率 0）直接全文；慢/标准按倍率缩放每字间隔 */
+  private typeLine(text: string, instant = false): number {
+    const mult = typeSpeedMultiplier();
+    if (this.typeTimer !== undefined) window.clearTimeout(this.typeTimer);
+    this.typeTimer = undefined;
+    this.chatText.classList.remove("typing");
+    if (instant || mult === 0 || text.length === 0) {
+      this.chatText.textContent = text;
+      return 0;
+    }
+    this.typingFullText = text;
+    this.typingPos = 0;
+    this.chatText.classList.add("typing");
+    const tick = (): void => {
+      this.typingPos++;
+      this.chatText.textContent = this.typingFullText.slice(0, this.typingPos);
+      if (this.typingPos >= this.typingFullText.length) {
+        this.chatText.classList.remove("typing");
+        this.typeTimer = undefined;
+        return;
+      }
+      const ch = this.typingFullText[this.typingPos - 1] ?? "";
+      const delay = Math.round((TYPE_MS + (PUNCTUATION.includes(ch) ? PUNCT_PAUSE_MS : 0)) * mult);
+      this.typeTimer = window.setTimeout(tick, delay);
+    };
+    tick();
+    return Math.round(text.length * TYPE_MS * mult);
+  }
+
+  /** 打字中点击台词区：立即补全当前句 */
+  private completeTyping(): void {
+    if (this.typeTimer === undefined) return;
+    window.clearTimeout(this.typeTimer);
+    this.typeTimer = undefined;
+    this.chatText.classList.remove("typing");
+    this.chatText.textContent = this.typingFullText;
   }
 
   /** 切换立绘：先淡出旧图（110ms）再换 src，避免加载闪白 */

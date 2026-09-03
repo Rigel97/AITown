@@ -193,8 +193,15 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 )
         elif msg_type == "save":
             # 即时存档（协议就位；前端按钮属后续 polish，autosave 之外
-            # 的手动保存点）。失败也回 ack（ok=False），前端提示重试
-            game_time = engine.save_now()
+            # 的手动保存点）。失败也回 ack（ok=False），前端提示重试。
+            # try 兑底：save_now 只捕 SAVE_ERRORS，export_state 等意外异常
+            # 直接冒泡会走 generic internal error——存档是旁路，任何失败
+            # 都应该以 ok=False 回而不是断言级报错（审查 A1 改造发现）
+            try:
+                game_time = engine.save_now()
+            except Exception:
+                logger.exception("手动存档意外失败")
+                game_time = ""
             await websocket.send_json(
                 {
                     "type": "save_ack",

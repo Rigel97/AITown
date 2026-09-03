@@ -20,6 +20,7 @@ from agents.resident import Resident
 from world import engine as we
 from world.clock import WorldClock, format_game_time, parse_game_time
 from world.engine import Conversation, ResidentRuntime, WorldEngine
+from world.locations import LOCATION_SPOTS
 from world.mapdata import to_pixel_center, to_tile
 
 
@@ -622,3 +623,46 @@ def test_public_derives_near_object_when_stationary() -> None:
     # 走路中：同位置但 path 非空 → 不报
     rt.path = [(shelf.col + 1, shelf.row)]
     assert "near_object" not in rt.public()
+
+
+# ---------- 站位防撞（2026-09-03：V3 七人在主街撞同一像素的名牌重影） ----------
+
+
+def test_spot_for_seven_residents_no_duplicate_station(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """7 % 5 = 2：吴文(index 5)/郑巧(index 6)的序号位与沈青梧/慕容瑾相撞。
+    序号位被占时必须按序顺延找空位——前 5 人占满 5 个站位且互不相同。"""
+    monkeypatch.setattr(we, "preferred_block", lambda *args, **kwargs: None)
+    eng = WorldEngine()
+    for i in range(7):
+        eng.residents.update(
+            {f"r{i}": ResidentRuntime(_resident(f"r{i}", f"居民{i}"), index=i)}
+        )
+    picked: list[tuple[int, int]] = []
+    for i in range(7):
+        rt = eng.residents[f"r{i}"]
+        spot = eng._spot_for(rt, "主街")
+        assert spot is not None
+        picked.append(spot)
+        rt.target_tile = spot  # 模拟每拍执行：选中后写入目标格
+    assert len(set(picked)) == 7  # 5 个站位 + 2 个邻近扩散格：7 人互不重叠
+    # 超出站位数的第 6/7 人由邻近扩散兜底：不离自己的首选位太远
+    for i in range(5, 7):
+        last = eng._spot_for(eng.residents[f"r{i}"], "主街")
+        first_i = LOCATION_SPOTS["主街"][i % 5]
+        assert max(abs(last[0] - first_i[0]), abs(last[1] - first_i[1])) <= 2
+
+
+def test_spot_for_respects_other_resident_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """序号位被其他居民的目标格占据时顺延：后选者不得与先选者同格。"""
+    monkeypatch.setattr(we, "preferred_block", lambda *args, **kwargs: None)
+    eng = WorldEngine()
+    ra = ResidentRuntime(_resident("a", "甲"), index=0)
+    rb = ResidentRuntime(_resident("b", "乙"), index=1)
+    eng.residents.update(a=ra, b=rb)
+    ra.target_tile = (52, 23)  # 甲已占主街首选站位
+    spot_b = eng._spot_for(rb, "主街")
+    assert spot_b is not None and spot_b != (52, 23)

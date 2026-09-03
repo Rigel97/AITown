@@ -5,14 +5,16 @@ DO NOT delete historical context if it is still relevant. Compress older complet
 -->
 
 ## 🏗️ Active Phase & Goal
-**Current Task:** 2026-08-28 前端显示优化四项全部完成（画布跟随窗口 RESIZE / 加载进度提示 / 状态栏时间人话化 / interiors_pt3 垫图消除警告，浏览器实测全闭环）；此前同日修复"全屏只剩背景绿"渲染事故 ✅
+**Current Task:** 2026-09-03 全仓代码审查完成 + 十项问题全部修复 ✅（后端 150 测/前端 27 测全绿，浏览器端到端实测通过）；同日完成：V3 居民落库、名牌清晰度专项、前端体验五件套（标题画面/设置/逐字打印/状态栏 DOM 化/气泡）、夜晚光圈、站位防撞（服务端动态避让+邻近扩散+前端错层双保险）、地图美化实验区（幂等脚本，待验收后全量）
 **Next Steps:**
-1. V3 居民落库（seed.py 按新叙事体重写七人 prompt_prefix + 重估成本——需用户拍板：改人设会一次性重置 Prompt 缓存；立绘重新生成，素材用户后续提供，旧图占位不阻塞）
-2. Phase 4（Security pass → 朋友演示 → 7 天北极星验证 2026-09-28 前）
-3. 观察项：M2.7 单次延迟波动（3–16s 都有，与居民对话并发挤占有关；有 4.5s 超时+托词兑底，不影响正确性，但 <5s 目标在波动面前只能算"多数时候达标"）
+1. 地图美化实验区验收（map_lab_day/night.png）→ 全量铺开
+2. V3 新立绘替换占位（素材由用户提供）
+3. Phase 4（Security pass → 朋友演示 → 7 天北极星验证 2026-09-28 前）
 
 ## 📂 Architectural Decisions
 *(Log specific choices made during the build here so future agents respect them)*
+- 2026-09-03 — **全仓审查修复十项（关键决策）**：①记忆词表改为从 residents 表+LOCATION_SPOTS **数据派生**（build_vocabulary），手抄词表在 V3 换人时静默失效是本次唯一 P1——新居民名零命中=关键词检索通道整体失效，现由 test_vocabulary_covers_all_seeded_residents_and_places 锁定，换人漏改会直接红；②WS 测试隔离机制化：tests/conftest.py autouse fixture 把 main.engine 换成替身（不 start/不读档/存档打桩），从此测试碰真实库的防线从"纪律"变"机制"；③NetClient 加固：destroy()+指数退避(1s→15s 上限)+connect 前关旧连接，TownScene shutdown 时销毁——防僵尸连接累积；④transcript 进 prompt 一律截尾 12 句（TRANSCRIPT_PROMPT_TAIL）防玩家连插话无限膨胀；⑤occupation 字段停止下发（前端 emoji 下线后无消费者）；decision 调用超时 15s→8s（只回一个字）。
+- 2026-09-03 — **V3 居民落库与名牌像素字体**：①新 id 与旧 id 完全不同（baker_lin→shen_qingwu 等），旧记忆/存档对新人设是人格污染，落库 = 备份后清空 memories/saves/residents（备份在 saves/v2_backup_20260903/）；②立绘/精灵/名牌色全部按气质重配而非重生成（用户拍板：素材后续提供，占位不阻塞）；③名牌字体选 Fusion Pixel 12px Proportional zh_hans（OFL，@vp-tw/cjk-web-fonts-fusion-pixel-font 切片包）——canvas 文本纹理只光栅化一次，启动时必须全量预载字体再建 Game（迟到不会重画）；Retina 发虚根因 = 画布 CSS 像素渲染被屏幕 2× 拉伸，解 = Text resolution 2 + 纹理 LINEAR（×2 档 1:1 采样，拉伸后每纹理像素恰 2×2 物理）；④头顶 emoji 移除（用户嫌弃彩色 emoji 违和，动作提示走 DOM HUD）。
 - 2026-08-28 — **画布跟随窗口（RESIZE）而非固定 960×640**：1920×1080 下固定画布只占 29% 屏，改 `scale: { mode: RESIZE, width/height: '100%' }`，相机 zoom 不变——同屏看到的像素世界随窗口变大（1920 下可见 960×540 vs 旧 480×320，翻倍多）。像素风语义不变：tile 仍 32px，放大倍数由 zoom 决定；高分屏由浏览器整数倍位图放大天然锐利（pixelArt 即"一像素一像素"）。`#stage` 从"960 居中相框"改 fixed inset:0 铺满（外框阴影移除，暗角保留）；body 不再 flex 居中。约定：RESIZE 下 HUD DOM 元素以窗口为参照（absolute 相对 #stage=窗口），对话卡仍居中、事件日志仍贴右上。
 - 2026-08-28 — **tileset 素材垫底到 32 倍数**：interiors_pt3.png 高 10032（313.5 行）触发 Phaser "Image tile area not tile size multiple" 警告。转换管线新增幂等垫图：非 32 倍数时底部垫透明到下一整行（10048=314 行），tilecount 仍按源声明 5008（313 行），垫出的空白行不在 gid 范围不会被采样。教训：`Image.open` 延迟加载，with 块外 paste 会因文件已关崩——先 `img.load()`。
 - 2026-08-26 — **前端美化（纯 CSS 表现层）**：主题色收敛到 `:root` CSS 变量（暖纸/深棕单一源头）；舞台 `#stage` 圆角+多层 box-shadow 相框化，`#hud::after` 内阴影暗角（`#hud` 加 `isolation:isolate` 保证只压画布不压面板）；事件日志/对话历史毛玻璃+自绘滚动条；`.hud-btn` 统一 hover/active/focus-visible；播报按钮展开态反色（`hud.ts` 同步 `.active`+aria-expanded）；空日志 CSS 占位「小镇还很安静……」；`prefers-reduced-motion` 关装饰动画。约定：`chat-layer-out` 160ms 与 `CLOSE_ANIM_MS` 锁死，改 CSS 时长必须同步改 JS。

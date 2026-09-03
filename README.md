@@ -25,9 +25,11 @@
 | 🌙 **每日反思** | 每天 23:00 用旗舰层模型复盘当日记忆，生成 1–2 条高层认知写回记忆流——关系与性格随时间自然生长 |
 | 🎮 **玩家自由对话** | 走近居民输入任意文本（非预设选项），回应带记忆上下文与细粒度位置感知（"图书馆呢，就在书架旁"）；可插话进行中的群聊 |
 | 🖥️ **全屏自适应** | 画布跟随窗口大小（Phaser RESIZE 模式）——窗口越大，同屏看到的镇子越大，像素风语义不变；配加载进度提示与左上角"小镇第 N 天 HH:MM"人话时间状态栏 |
+| 🌃 **昼夜双面貌** | 5 档 ColorMatrix 昼夜调色 + 入夜后店铺/据点自动亮起暖色光圈（ADD 混合、程序生成零素材）；设置面板可一键关 |
 | 💾 **世界连续存档** | 60s 自动存 + 停服存 + 启动读档：关掉重开，时钟、位置、进行中的计划全部连续，重启零 LLM 重烧 |
 | 📜 **小镇播报 + 编年史** | 实时事件日志 UI 让"涌现"被看见；全部交互逐句全文落盘 `saves/chronicle.jsonl` |
 | 🎭 **出戏防线** | 玩家试探"你是 AI 吗"时，居民以符合人设的方式困惑否认并岔开话题；LLM 超时降级为符合人设的托词而非报错 |
+| 🖱️ **产品化前端** | 标题画面（萤火粒子 + 像素字体）→ 走进小镇转场；设置面板（文字速度/昼夜光照，localStorage 持久化）；对话卡逐字打印（可点击跳过）；居民头顶名牌像素字体渲染 + 防重叠自动错层；群聊时说话者头顶冒台词气泡 |
 | 💰 **成本第一原则** | **事件驱动，居民无事可做时零 LLM 调用**；人设前缀逐字固定以吃满 Prompt 缓存（缓存读取价 = 输入价 1/5）。实测约 **¥0.76/游戏日**（预算 ¥2.1，达标 36%） |
 
 ### 小镇的居民
@@ -100,11 +102,11 @@ echo "MINIMAX_API_KEY=你的key" > .env
 cd client && npm install && cd ..
 cd server && pip install -r requirements.txt && cd ..
 
-# 4. 一键启动（后端 :8000 + 前端 :5173）
+# 4. 一键启动（后端 :9000 + 前端 :5174）
 ./start.sh
 ```
 
-打开 http://localhost:5173 即可进入小镇。
+打开 http://localhost:5174 即可进入小镇。
 
 ## 🎮 操作
 
@@ -116,33 +118,34 @@ cd server && pip install -r requirements.txt && cd ..
 | `1` / `2` / `3` | 缩放 ×2 / ×1.5 / ×1 |
 | `B` | 暖色滤镜开关 |
 
-其他交互：左上角状态栏实时显示「小镇第 N 天 HH:MM」时间、视角倍率与昼夜光照图标；屏幕右侧「📜 小镇播报」实时滚动事件日志（含居民到达与对话内容）；居民头顶名牌显示当前动作 emoji；对话卡大立绘 + 台词区，群聊逐句轮播。画面自适应窗口大小——窗口拉大，看到的镇子越大。
+其他交互：左上角状态栏实时显示「小镇第 N 天 HH:MM」时间、视角倍率与昼夜光照图标（DOM 原生渲染，高分屏不模糊）；右上角「📜 小镇播报」实时滚动事件日志（按对话/时刻/动作分类着色）与「⚙ 设置」面板；居民头顶名牌用像素字体渲染并自动防重叠错层；群聊时说话者头顶冒出台词气泡；对话卡大立绘 + 台词逐字打印（点击可跳过）。画面自适应窗口大小——窗口拉大，看到的镇子越大。
 
 ## 📁 项目结构
 
 ```
 AITown/
 ├── client/                  # Phaser 4 + Vite + TypeScript 前端
-│   ├── src/scenes/          #   TownScene：Tiled 地图渲染/插值/碰撞/相机
+│   ├── src/scenes/          #   TitleScene（标题画面）/ TownScene：Tiled 地图渲染/插值/碰撞/相机
 │   ├── src/ui/              #   HUD（对话卡/事件日志，DOM 层）
-│   ├── src/net/             #   WebSocket 客户端（消息显式类型+运行时校验）
-│   ├── src/world/           #   地图数据/动作 emoji 映射
-│   └── scripts/             #   地图转换管线（the_ville 源数据 → 前后端共读 JSON）
+│   ├── src/net/             #   WebSocket 客户端（消息显式类型+运行时校验+指数退避重连）
+│   ├── src/settings.ts      #   设置面板（文字速度/昼夜光照，localStorage 持久化）
+│   ├── src/world/           #   地图数据类型/文案函数
+│   └── scripts/             #   地图转换管线（the_ville 源数据 → 前后端共读 JSON）+ 美化后处理
 ├── server/                  # FastAPI 后端
 │   ├── agents/              #   智能体循环：planner / dialogue / reflection / resident
-│   ├── memory/              #   记忆流：store（写入）/ retrieve（三要素检索）
+│   ├── memory/              #   记忆流：store（写入+派生词表）/ retrieve（三要素检索）
 │   ├── llm/                 #   LLM 网关：统一 chat(prompt, tier)，换 provider 只改这里
-│   ├── world/               #   engine（主循环）/ clock / pathfinding / objects / chronicle
+│   ├── world/               #   engine（主循环+站位防撞）/ clock / pathfinding / objects / chronicle / persistence
 │   ├── db/                  #   schema.sql + seed.py（7 居民人设定档）
-│   └── tests/               #   145 个 pytest 用例
+│   └── tests/               #   150 个 pytest 用例
 └── saves/                   # 玩家存档区（gitignore）：记忆库 + chronicle.jsonl 编年史
 ```
 
 ## ✅ 测试
 
 ```bash
-cd server && pytest          # 145 个用例：记忆检索/对话解析/寻路/家具感知/引擎/存档/WebSocket 集成
-cd client && npm test        # vitest 23 个用例：动作 emoji/对话卡文案/前端纯函数
+cd server && pytest          # 150 个用例：记忆检索/对话解析/寻路/家具感知/引擎/存档/WebSocket 集成/站位防撞
+cd client && npm test        # vitest 27 个用例：设置持久化/网络重连退避/名牌布局/地图数据/对话文案
 cd client && npm run lint    # ESLint（no-explicit-any 设为 error）
 ```
 
@@ -161,7 +164,9 @@ cd client && npm run lint    # ESLint（no-explicit-any 设为 error）
 - [x] Phase 3 打磨：存档/读档、出戏防护、错误补全、成本实测校准（**实测 ¥0.76/游戏日 ≤ ¥2.1 目标**）
 - [x] 地图大改版 v3：the_ville 122×35 室内小镇 + 家具语义化感知 + 前端 UI 美化
 - [x] 显示体验打磨：全屏自适应画布（RESIZE）+ 加载进度提示 + 状态栏时间人话化
-- [ ] V3 新居民落库：7 位新叙事体人设入库（Prompt 缓存一次性重置后重估成本）
+- [x] V3 居民落库：7 位新叙事体人设入库（seed 重写 + 存档重置 + 前端映射/立绘同步）
+- [x] 体验与健壮性升级：标题画面/设置面板/对话逐字打印/名牌像素字体+防重叠/夜晚光圈/站位防撞（服务端动态避让）/记忆词表数据派生/重连退避
+- [ ] 地图美化全量铺开（实验区已打样）+ V3 新立绘替换占位
 - [ ] Phase 4 "上线"：朋友演示 + 连续 7 天主动玩验证
 
 ---

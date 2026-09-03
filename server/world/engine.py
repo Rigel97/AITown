@@ -152,6 +152,7 @@ class ResidentRuntime:
         self.plan: list[PlanEntry] = plan_from_json(info.daily_plan)
         self.planned_day = 0  # 0 = 今天还没生成计划
         self.path: list[tuple[int, int]] = []
+        self.target_tile: tuple[int, int] | None = None  # 当前目的格（站位防撞用）
         self.current_action = info.occupation  # 默认动作文案
         self.current_location: str | None = None  # 到达过的最近计划地点
         self.conversation_id: int | None = None  # 正在进行的对话 id（None=没在聊）
@@ -166,10 +167,10 @@ class ResidentRuntime:
             "name": self.info.name,
             "x": self.info.x,
             "y": self.info.y,
-            "action": self.current_action,
-            # 职业也下发：前端动作用不了关键词时，头顶 emoji 回退到职业默认
-            "occupation": self.info.occupation,
-            "chatting": self.conversation_id is not None,
+        "action": self.current_action,
+        # chatting = 在场对话中（前端提示"按 Enter 加入"用）；occupation
+        # 已不下发——头顶 emoji 下线后前端无消费者（审查 R1，2026-09-03）
+        "chatting": self.conversation_id is not None,
         }
         # 细粒度感知（Phase D）：站定时身边 2 格内与当前动作最相关的家具。
         # 派生量不入存档快照（位置恢复后自动重算）；走路时不报，避免
@@ -299,6 +300,12 @@ class WorldEngine:
         站位引导（Phase D）："在图书馆看书"→ 书架旁而不是房间正中央。
         匹配的家具使用点若已被其他居民占着（≤1 格），回退普通站位点——
         两人挤同一像素的视觉重叠比"没站到家具旁"更伤观感。
+
+        普通站位也不只看序号取模：序号位被其他居民的目标占据时按序顺延
+        找空位——V3 七人后 7 % 5 = 2，吴文(index 5)与沈青梧(index 0)、
+        郑巧(index 6)与慕容瑾(index 1)在主街撞到同一像素，实测名牌
+        重影（2026-09-03）。每拍重算、无内存分配态，所以占用检查用
+        "其他居民的当前目标格"动态判定，遍历序稳定（插入序）故确定性不变。
         """
         blk = preferred_block(location, action)
         if blk is not None and not self._spot_taken(blk, rt):
@@ -306,7 +313,38 @@ class WorldEngine:
         spots = LOCATION_SPOTS.get(location)
         if not spots:
             return None
-        return spots[rt.index % len(spots)]
+        start = rt.index % len(spots)
+        first = spots[start]
+        if not self._tile_reserved(*first, rt):
+            return first
+        for offset in range(1, len(spots)):
+            idx = (start + offset) % len(spots)
+            if not self._tile_reserved(*spots[idx], rt):
+                return spots[idx]
+        # 站位全占（人数 > 站位数，如七人日程全在主街而主街只有 5 站）：
+        # 首选位邻近 2 圈找未占且可走的格，散到站位旁而不是叠回首选位
+        for ring in range(1, 3):
+            for dr in range(-ring, ring + 1):
+                for dc in range(-ring, ring + 1):
+                    if max(abs(dr), abs(dc)) != ring:
+                        continue
+                    cand = (first[0] + dc, first[1] + dr)
+                    if is_walkable(*cand) and not self._tile_reserved(*cand, rt):
+                        return cand
+        return first  # 邻近也全占：回退首选位，让前端错层兜底
+
+    def _tile_reserved(self, col: int, row: int, rt: ResidentRuntime) -> bool:
+        """目标格是否已被其他居民的目标/位置占据（同格才算撞，站位本就散开）。"""
+        for other in self.residents.values():
+            if other is rt:
+                continue
+            other_tile = other.target_tile or (
+                to_tile(other.info.x),
+                to_tile(other.info.y),
+            )
+            if other_tile == (col, row):
+                return True
+        return False
 
     def _spot_taken(self, blk: InteractionBlock, rt: ResidentRuntime) -> bool:
         """家具使用点 1 格内已有其他居民（站位引导的防重叠兑底）。"""
@@ -344,6 +382,7 @@ class WorldEngine:
         if target is None:
             logger.warning("计划含未知地点 %s（%s）", entry.location, rt.info.id)
             return
+        rt.target_tile = target  # 站位防撞：其他居民选位时会看到这个目标格
 
         current_tile = (to_tile(rt.info.x), to_tile(rt.info.y))
         if current_tile == target:
@@ -828,8 +867,6 @@ class WorldEngine:
     def recent_events(self) -> list[dict[str, str]]:
         """最近播报的快照（连接建立时补发给客户端）。"""
         return list(self._recent_events)
-
-    # ---------- 玩家对话 ----------
 
     async def _run_reflections(self, day: int) -> None:
         """为全体居民生成当日反思（每居民 1 次 M3 调用，并发）。"""
