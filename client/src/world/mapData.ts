@@ -20,15 +20,15 @@ export const FOLK_FRAME_H = 64; // 角色 1 格宽 × 2 格高
 const FRAMES_PER_CHAR = 7; // 1 idle + 6 walk
 const SHEET_COLS = 1792 / FOLK_FRAME_W; // 56
 
-/** 居民 id → folk2 角色序号；玩家用 7 */
+/** 居民 id → folk2 角色序号（V3 起随气质立绘映射走，见 specs/v3_residents_draft.md）；玩家用 7 */
 export const CHARACTER_INDEX: Record<string, number> = {
-  baker_lin: 0,
-  librarian_su: 1,
-  florist_mo: 2,
-  lao_zhou: 3,
-  hong_jie: 4,
-  xiao_dou: 5,
-  lao_song: 6,
+  zheng_qiao: 0, // 郑巧 ← 林师傅位（同为木匠）
+  zhou_xingxing: 1, // 周星星 ← 苏晚位（安静文艺）
+  gao_xin: 2, // 高新 ← 阿茉位（元气少女）
+  wu_wen: 3, // 吴文 ← 老周位（退休长辈）
+  shen_qingwu: 4, // 沈青梧 ← 红姐位（店铺老板娘）
+  li_suan: 5, // 李算 ← 小豆子位（年轻男性）
+  murong_jin: 6, // 慕容瑾 ← 老宋位（沉稳大叔）
 };
 export const PLAYER_CHARACTER = 7;
 
@@ -81,6 +81,8 @@ export interface VilleMapData {
   /** 行主序可行走网格：walkable[row][col]，与服务端寻路同源 */
   walkable: boolean[][];
   playerSpawn: { col: number; row: number };
+  /** 地名 → 站位点列表（瓦片坐标，转换管线采样；后端 locations.py 同源） */
+  locations: Record<string, Array<[number, number]>>;
 }
 
 /** 渲染在角色之上的前景层（树冠/吧台等半透明遮挡） */

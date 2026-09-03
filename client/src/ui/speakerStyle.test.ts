@@ -11,13 +11,13 @@ import {
 
 /** 与 server/db/seed.py 的居民 id 保持同步（漏一个 = 那位居民没有名牌专属色） */
 const SEEDED_RESIDENT_IDS = [
-  "baker_lin",
-  "librarian_su",
-  "florist_mo",
-  "lao_zhou",
-  "hong_jie",
-  "xiao_dou",
-  "lao_song",
+  "shen_qingwu",
+  "murong_jin",
+  "gao_xin",
+  "zhou_xingxing",
+  "li_suan",
+  "wu_wen",
+  "zheng_qiao",
 ] as const;
 
 describe("speakerStyle", () => {
@@ -33,7 +33,7 @@ describe("speakerStyle", () => {
   });
 
   it("立绘 URL = 目录/{居民id}.png（文件名即 id，零映射）", () => {
-    expect(portraitUrl("baker_lin")).toBe(`${PORTRAIT_DIR}/baker_lin.png`);
+    expect(portraitUrl("shen_qingwu")).toBe(`${PORTRAIT_DIR}/shen_qingwu.png`);
   });
 
   it("配色表键集与种子居民一致（防止改名漏改）", () => {

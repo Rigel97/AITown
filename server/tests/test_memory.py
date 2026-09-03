@@ -9,15 +9,19 @@ from pathlib import Path
 
 import pytest
 
+from agents.resident import load_residents
+from db.seed import seed
 from memory.retrieve import retrieve
 from memory.store import (
     IMPORTANT_MEMORY_THRESHOLD,
     add_memory,
+    build_vocabulary,
     extract_keywords,
     get_important_memories,
     get_recent_memories,
 )
 from world.clock import parse_game_time
+from world.locations import LOCATION_SPOTS
 
 SCHEMA = Path(__file__).resolve().parents[1] / "db" / "schema.sql"
 NOW = parse_game_time("day5-12:00")
@@ -33,21 +37,52 @@ def _fresh_db(tmp_path: Path) -> Path:
 # ---------- store ----------
 
 
-def test_extract_keywords_hits_vocabulary() -> None:
-    assert extract_keywords("在红姐的餐馆吃了饭") == ["红姐", "餐馆"]
-    assert extract_keywords("今天什么也没发生") == []
+def test_extract_keywords_hits_explicit_vocabulary() -> None:
+    """显式传词表：纯函数语义（匹配行为与数据源无关）。"""
+    vocab = ["红姐", "餐馆"]
+    assert extract_keywords("在红姐的餐馆吃了饭", vocab) == ["红姐", "餐馆"]
+    assert extract_keywords("今天什么也没发生", vocab) == []
+
+
+def test_vocabulary_covers_all_seeded_residents_and_places(tmp_path: Path) -> None:
+    """审查 C1 锁定：词表从数据派生，现役居民名/地名必须全部在词表里。
+
+    V3 换人时手抄词表漏改，新名字零命中，关键词检索静默失效——
+    这条测试断言"换人自动同步"，下次再换居民漏改会直接红。
+    """
+    db = _fresh_db(tmp_path)
+    seed(db)
+    vocab = build_vocabulary(db)
+    residents = load_residents(db)
+    for r in residents:
+        assert r.name in vocab, f"居民 {r.name} 不在词表：检索会静默失效"
+    for place in LOCATION_SPOTS:
+        assert place in vocab, f"地点 {place} 不在词表"
+    assert "玩家" in vocab  # 通用词保留
+
+
+def test_extract_keywords_matches_new_residents(tmp_path: Path) -> None:
+    """C1 回归：派生词表能命中 V3 新居民名与新地名。"""
+    db = _fresh_db(tmp_path)
+    seed(db)
+    vocab = build_vocabulary(db)
+    hits = extract_keywords("我在青梧咖啡和沈青梧聊绘画", vocab)
+    assert "沈青梧" in hits and "青梧咖啡" in hits
 
 
 def test_add_and_get_recent_roundtrip(tmp_path: Path) -> None:
     db = _fresh_db(tmp_path)
-    add_memory("baker_lin", "day1-08:00", "observation", "清晨开门烤面包", 3, db)
-    add_memory("baker_lin", "day1-09:00", "dialogue", "玩家在面包店夸面包好吃", 7, db)
+    seed(db)  # 词表从数据派生：先 seed 才有居民名/地名可命中
+    add_memory("shen_qingwu", "day1-08:00", "observation", "清晨烘豆备料", 3, db)
+    add_memory(
+        "shen_qingwu", "day1-09:00", "dialogue", "玩家在青梧咖啡夸面包好喝", 7, db
+    )
 
-    memories = get_recent_memories("baker_lin", db_path=db)
+    memories = get_recent_memories("shen_qingwu", db_path=db)
     assert len(memories) == 2
     assert memories[0].game_time == "day1-09:00"  # 新的在前
-    # keywords 写入时自动从词表抽取
-    assert set(memories[0].keywords) == {"玩家", "面包店", "面包"}
+    # keywords 写入时自动从派生词表抽取（居民名/地名/通用词）
+    assert set(memories[0].keywords) == {"玩家", "青梧咖啡", "面包"}
 
 
 def test_importance_out_of_range_raises(tmp_path: Path) -> None:

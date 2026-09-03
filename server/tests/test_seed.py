@@ -26,13 +26,13 @@ def test_seed_writes_all_residents(tmp_path: Path) -> None:
     assert seed(db) == 7
     residents = load_residents(db)
     assert {r.id for r in residents} == {
-        "baker_lin",
-        "librarian_su",
-        "florist_mo",
-        "lao_zhou",
-        "hong_jie",
-        "xiao_dou",
-        "lao_song",
+        "shen_qingwu",
+        "murong_jin",
+        "gao_xin",
+        "zhou_xingxing",
+        "li_suan",
+        "wu_wen",
+        "zheng_qiao",
     }
     for r in residents:
         assert r.prompt_prefix.startswith("你是 AI 小镇的居民")

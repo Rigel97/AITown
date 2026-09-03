@@ -9,15 +9,15 @@
 
 export const PORTRAIT_DIR = "assets/portraits";
 
-/** 居民 id → 名牌底色（与现有治愈系暖色调统一，深底 + 米字） */
+/** 居民 id → 名牌底色（V3 新居民，按职业/气质联想，与治愈系暖色调统一，深底 + 米字） */
 export const SPEAKER_COLORS: Record<string, string> = {
-  baker_lin: "#b46b3d", // 林师傅：面包师的暖棕
-  librarian_su: "#6d8fa8", // 苏晚：图书馆的雾蓝
-  florist_mo: "#7ca25c", // 阿茉：花匠的草绿
-  lao_zhou: "#4a648c", // 老周：邮差制服藏青
-  hong_jie: "#c23b4e", // 红姐：老板娘的红褂子
-  xiao_dou: "#e08a3c", // 小豆子：少年的亮橙
-  lao_song: "#6b5340", // 老宋：木匠的深棕
+  shen_qingwu: "#b46b3d", // 沈青梧：烘焙咖啡的暖棕
+  murong_jin: "#3e5c76", // 慕容瑾：远洋船长的海雾蓝
+  gao_xin: "#d95763", // 高新：驻唱歌手的烈焰珊瑚
+  zhou_xingxing: "#8d6cab", // 周星星：画家的暮山紫
+  li_suan: "#5f7d8c", // 李算：代码屏幕的灰蓝
+  wu_wen: "#4e7a5a", // 吴文：老派教师的墨绿
+  zheng_qiao: "#6b5340", // 郑巧：木匠的深棕
 };
 
 /** 玩家名牌色 */

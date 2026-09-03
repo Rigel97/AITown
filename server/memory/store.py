@@ -4,9 +4,12 @@
 - 一切皆记忆：对话/移动/事件/反思统一进 memories 一张表，检索接口统一，
   世界观一致性自然涌现。写入路径挂在行动循环的每一步（行动结果即记忆），
   而不是事后补录——"记得"是默认行为，不会漏。
-- keywords 写入时生成：用词表匹配（居民名 + 地名）从 content 抽取。
-  小镇实体是有限的（7 人 + 7 建筑 + 玩家），词表匹配比通用中文分词更准、
+- 关键词写入时生成：用词表匹配（居民名 + 地名）从 content 抽取。
+  小镇实体是有限的（7 人 + 地图地点 + 玩家），词表匹配比通用中文分词更准、
   完全确定性、零依赖；检索侧只做集合命中，不做 NLP。
+- **词表从数据派生**（2026-09-03 审查 C1）：V3 换居民时手抄词表没跟着换，
+  新名字零命中，关键词检索通道整体静默失效——现役实体名必须自动进入
+  词表（residents 表 + 地图 locations），手抄部分只留跨版本通用词。
 - store 只管存取（含"取候选"），打分排序在 retrieve.py——职责分离，
   调权重不用碰 SQL。
 - 时间排序用自增 id 而非 game_time 字符串（"day10" 字典序小于 "day2"）；
@@ -29,34 +32,31 @@ MemoryType = Literal["observation", "dialogue", "event", "reflection"]
 # 深检：实测每人 ~950 条记忆，100 条窗口只能覆盖最近 2-3 个游戏日）。
 IMPORTANT_MEMORY_THRESHOLD = 6
 
-# 关键词词表：小镇的全部实体。新居民/新建筑定档时必须同步进来，
-# 否则相关内容检索不到（test_seed 里有关系网断言兜底人设，词表靠这份清单维护）。
-DEFAULT_VOCABULARY = [
-    # 居民 + 玩家
-    "林师傅",
-    "小豆子",
-    "苏晚",
-    "阿茉",
-    "老周",
-    "红姐",
-    "老宋",
-    "玩家",
-    # 地点
-    "面包店",
-    "杂货店",
-    "花店",
-    "图书馆",
-    "餐馆",
-    "北宅",
-    "东南宅",
-    "广场",
-    "公告牌",
-    # 事物与事件
-    "面包",
-    "花",
-    "书",
-    "供货日",
-]
+# 通用词：跨版本稳定的概念（居民/地点名一律从数据派生，不写死在这里）
+_COMMON_VOCABULARY = ["玩家", "面包", "花", "书", "供货日"]
+
+
+def build_vocabulary(db_path: Path = DB_PATH) -> list[str]:
+    """从现役数据派生关键词词表：居民名 + 地图地点名 + 通用词。
+
+    V3 换人时手抄词表漏改导致关键词检索整体失效（审查 C1），从此处起
+    词表永远与 residents 表/地图数据同源——换人/换图自动同步。
+    """
+    from world.locations import LOCATION_SPOTS  # 延迟导入避免循环依赖
+
+    names: list[str] = []
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute("SELECT name FROM residents").fetchall()
+    names.extend(row[0] for row in rows)
+    names.extend(LOCATION_SPOTS.keys())
+    # 去重保序（居民名与地名重名时只留一份），再拼通用词
+    seen: set[str] = set()
+    unique: list[str] = []
+    for w in [*names, *_COMMON_VOCABULARY]:
+        if w and w not in seen:
+            seen.add(w)
+            unique.append(w)
+    return unique
 
 
 @dataclass
@@ -71,8 +71,8 @@ class Memory:
 
 
 def extract_keywords(content: str, vocabulary: list[str] | None = None) -> list[str]:
-    """用词表从文本里抽取关键词（子串命中）。"""
-    vocab = vocabulary if vocabulary is not None else DEFAULT_VOCABULARY
+    """用词表从文本里抽取关键词（子串命中）。词表默认从现役数据派生。"""
+    vocab = vocabulary if vocabulary is not None else build_vocabulary()
     return [word for word in vocab if word in content]
 
 
